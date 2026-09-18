@@ -51,6 +51,9 @@ The plugin declares these `userConfig` values in
 | `keepResultThreshold` | `0.4` |
 | `keepCallThreshold` | `0.15` |
 | `redact` | `standard` |
+| `gitleaks` | `false` |
+| `gitleaksBinary` | `gitleaks` on PATH |
+| `gitleaksConfig` | gitleaks defaults |
 | `protectErrors` | `true` |
 | `sideEffectTools` | built-in list |
 | `preserveRecentMessages` | `6` |
@@ -66,6 +69,9 @@ The plugin declares these `userConfig` values in
 
 `redact` masks personal data and secrets in the state before it leaves the
 machine; the messages the hook hands back are always the verbatim originals.
+`gitleaks` adds a scan by the local binary through `$.process.run`, and every
+secret it reports is masked as a literal value; a missing binary is logged and
+the built-in patterns carry on alone.
 `cooldownTurns`, `minPercentDrop` and `maxAutoCompactions` are the guards that
 keep `turn.complete` from asking for a compaction every turn: see the README,
 [What this fork changes](../README.md#what-this-fork-changes).

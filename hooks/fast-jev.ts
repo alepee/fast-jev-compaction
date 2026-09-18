@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, droppableRatio, reductionRatio, resolveOptions } from '../src/compact.js';
+import { scanForSecrets, type GitleaksOptions, type ProcessRunner } from '../src/gitleaks.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -53,6 +54,10 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  /** Scan the state with gitleaks before sending it. Off unless configured. */
+  gitleaks: boolean;
+  gitleaksBinary?: string;
+  gitleaksConfig?: string;
   compactAtPercent: number;
   minReductionRatio: number;
   cooldownTurns: number;
@@ -106,8 +111,13 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       0,
       optionNumber(options, 'maxAutoCompactions', HOOK_DEFAULTS.maxAutoCompactions),
     ),
+    gitleaks: options['gitleaks'] === true,
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  const gitleaksBinary = optionString(options, 'gitleaksBinary');
+  if (gitleaksBinary) config.gitleaksBinary = gitleaksBinary;
+  const gitleaksConfig = optionString(options, 'gitleaksConfig');
+  if (gitleaksConfig) config.gitleaksConfig = gitleaksConfig;
   const redact = optionString(options, 'redact');
   if (redact === 'off' || redact === 'standard' || redact === 'strict') config.redact = redact;
   const sideEffectTools = optionString(options, 'sideEffectTools');
@@ -200,6 +210,32 @@ export type SessionCompaction = {
   result: CompactResult;
   messages: SessionMessage[];
 };
+
+/**
+ * Asks gitleaks for the secrets in what is about to be sent, so the redactor
+ * can mask values no pattern of ours would recognise. A missing binary is not
+ * an error: the built-in rules still run, and the caller logs why.
+ */
+export async function withScannedSecrets(
+  messages: readonly SessionMessage[],
+  config: HookConfig,
+  run: ProcessRunner | undefined,
+): Promise<{ config: HookConfig; note?: string }> {
+  if (!config.gitleaks || !run) return { config };
+  const options: GitleaksOptions = {};
+  if (config.gitleaksBinary) options.binary = config.gitleaksBinary;
+  if (config.gitleaksConfig) options.config = config.gitleaksConfig;
+  const scan = await scanForSecrets(messages, run, options);
+  if (scan.skipped) return { config, note: scan.skipped };
+  if (scan.secrets.length === 0) return { config };
+  return {
+    config: {
+      ...config,
+      redactLiterals: [...(config.redactLiterals ?? []), ...scan.secrets],
+    },
+    note: `gitleaks masked ${scan.secrets.length} secret(s)`,
+  };
+}
 
 /** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
 export async function compactSession(
@@ -395,7 +431,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
         );
         return next(event);
       }
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
+      // Wrapped rather than passed: the engine's nouns are only ever called
+      // in place, never handed around as values.
+      const scanned = await withScannedSecrets(event.messages, config, (argv, init) =>
+        $.process.run(argv, init),
+      );
+      if (scanned.note) $.ui.log(scanned.note);
+      const { result, messages } = await compactSession(event.messages, scanned.config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });

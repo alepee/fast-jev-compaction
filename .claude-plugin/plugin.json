@@ -34,6 +34,22 @@
       "description": "Never remove a call whose result was an error: the failure is usually the constraint that matters.",
       "default": true
     },
+    "gitleaks": {
+      "type": "boolean",
+      "title": "Scan with gitleaks",
+      "description": "Run the local gitleaks binary over the conversation before sending it, and mask every secret it finds. Needs gitleaks on PATH; when it is missing the built-in patterns still apply.",
+      "default": false
+    },
+    "gitleaksBinary": {
+      "type": "string",
+      "title": "gitleaks binary",
+      "description": "Path to the gitleaks binary. Defaults to gitleaks on PATH."
+    },
+    "gitleaksConfig": {
+      "type": "string",
+      "title": "gitleaks config",
+      "description": "Path to a .gitleaks.toml to use instead of the default rules."
+    },
     "sideEffectTools": {
       "type": "string",
       "title": "Side-effect tools",

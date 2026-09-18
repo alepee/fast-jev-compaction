@@ -57,6 +57,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({
+      gitleaks: false,
       compactAtPercent: 60,
       minReductionRatio: 0.25,
       cooldownTurns: 3,
@@ -78,6 +79,7 @@ describe('hook config', () => {
       }),
     ).toEqual({
       apiKey: 'k',
+      gitleaks: false,
       keepCallThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',

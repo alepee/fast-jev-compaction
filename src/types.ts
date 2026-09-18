@@ -138,6 +138,12 @@ export interface CompactOptions {
   redact?: RedactionLevel;
   /** Extra redaction rules, appended to the built-in ones. */
   redactRules?: readonly RedactionRule[];
+  /**
+   * Literal values to mask wherever they appear, whatever their shape. Filled
+   * by a detector that returns values rather than patterns, such as the
+   * gitleaks scan the hook runs before compacting.
+   */
+  redactLiterals?: readonly string[];
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
@@ -156,6 +162,7 @@ export interface ResolvedCompactOptions {
   protectErrors: boolean;
   redact: RedactionLevel;
   redactRules: readonly RedactionRule[];
+  redactLiterals: readonly string[];
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;

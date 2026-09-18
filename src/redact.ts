@@ -123,6 +123,30 @@ export interface RedactorOptions {
   level?: RedactionLevel;
   /** Appended to the built-in rules, so a project can mask its own shapes. */
   extraRules?: readonly RedactionRule[];
+  /**
+   * Literal values to mask wherever they appear, whatever their shape. This is
+   * how a detector that returns values rather than patterns plugs in, such as
+   * the gitleaks scan in `gitleaks.ts`. Matched before everything else.
+   */
+  literals?: readonly string[];
+}
+
+function escapeLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Literal values as rules, longest first so a value never gets half-masked by
+ * a shorter one it contains.
+ */
+export function literalRules(literals: readonly string[]): RedactionRule[] {
+  const sorted = [...new Set(literals.filter((value) => value.trim().length > 0))].sort(
+    (a, b) => b.length - a.length,
+  );
+  return sorted.map((value) => ({
+    name: 'secret',
+    pattern: new RegExp(escapeLiteral(value), 'g'),
+  }));
 }
 
 /** A no-op redactor, for `level: 'off'` and for tests. */
@@ -141,9 +165,11 @@ export function noRedaction(): Redactor {
 export function createRedactor(options: RedactorOptions = {}): Redactor {
   const level = options.level ?? 'standard';
   if (level === 'off') return noRedaction();
-  const rules = [...DEFAULT_RULES, ...(options.extraRules ?? [])].filter(
-    (rule) => (rule.level ?? 'standard') === 'standard' || level === 'strict',
-  );
+  const rules = [
+    ...literalRules(options.literals ?? []),
+    ...DEFAULT_RULES,
+    ...(options.extraRules ?? []),
+  ].filter((rule) => (rule.level ?? 'standard') === 'standard' || level === 'strict');
   const labels = new Map<string, string>();
   const counts: Record<string, number> = {};
 

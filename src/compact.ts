@@ -45,6 +45,7 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   protectErrors: true,
   redact: 'standard',
   redactRules: [],
+  redactLiterals: [],
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
@@ -86,6 +87,7 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     protectErrors: options.protectErrors ?? DEFAULT_OPTIONS.protectErrors,
     redact: options.redact ?? DEFAULT_OPTIONS.redact,
     redactRules: options.redactRules ?? DEFAULT_OPTIONS.redactRules,
+    redactLiterals: options.redactLiterals ?? DEFAULT_OPTIONS.redactLiterals,
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -359,6 +361,7 @@ export async function compact(
   const redactor: Redactor = createRedactor({
     level: resolved.redact,
     extraRules: resolved.redactRules,
+    literals: resolved.redactLiterals,
   });
 
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };

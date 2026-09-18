@@ -47,6 +47,9 @@ built-in compaction summary with the original messages.
    distinct value gets a stable placeholder (`[email_1]`), so Jev still sees
    that two mentions are the same thing. Masking is one-way and applies only to
    the state: **the compacted transcript is always the verbatim original**.
+   With `gitleaks: true` the local gitleaks binary scans the same text first
+   and every value it reports is masked too, which covers the secrets no
+   pattern of ours would recognise.
 4. For every non-pinned call Jev gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
@@ -121,6 +124,7 @@ put it in a source file.
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `redact` | `'standard'` | PII masking of the state: `off`, `standard`, `strict` |
 | `redactRules` | `[]` | Extra masking rules, appended to the built-in ones |
+| `redactLiterals` | `[]` | Literal values to mask, whatever their shape (what a gitleaks scan fills) |
 | `keepResultThreshold` | `0.4` | Below it, a tool result is truncated to its head |
 | `keepCallThreshold` | `0.15` | Below it, the call itself is removed. Irreversible |
 | `keepThreshold` | unset | Legacy single knob; sets both thresholds |
@@ -139,6 +143,10 @@ stage was needed, and the number of requests.
 `droppableRatio(messages, options)` answers, without any request, the best
 reduction a compaction of this transcript could reach.
 
+`scanForSecrets(messages, run, options)` runs `gitleaks stdin` through an
+injected process runner and returns the values to mask; it never throws, so a
+missing binary degrades to the built-in patterns.
+
 ## What this fork changes
 
 Three things, from an audit of the upstream design.
@@ -152,10 +160,27 @@ replaced by a note. That is a third party in the chain, and nothing said so.
 
 This fork masks the state before it leaves the machine (`redact`, `standard` by
 default) and reports what it masked in `stats.redactions` and in the toast.
-What it does not do: recognise a person's name, spot a secret with no
-recognisable shape, or read a base64 blob. **Masking narrows the exposure, it
-does not remove it.** If the conversation must not reach a third party at all,
-do not run this plugin.
+
+Two layers, because they catch different things:
+
+- **Built-in patterns**, always on, no dependency: emails, API tokens with a
+  known prefix, JWTs, private keys, `key=value` secrets, URL credentials,
+  IBANs, Luhn-valid cards, the account name in a home path.
+- **gitleaks** (`gitleaks: true`), opt-in: the local binary reads the same text
+  on stdin and reports every secret its rules match, which the redactor then
+  masks as literal values. Hundreds of maintained rules instead of our dozen,
+  one static binary, no model to load, and nothing leaves the machine. When it
+  is not installed the run says so in the log and the patterns carry on alone.
+
+An NER detector (Presidio and the like) would add what neither layer has,
+names and places, at the cost of a Python runtime and a several-hundred-
+megabyte model load on a path that has to stay fast. Deliberately left out for
+now; the `literals` seam in `redact.ts` is where such a backend would plug in.
+
+What masking does not do: recognise a person's name, or spot a secret with no
+recognisable shape that gitleaks does not know either. **Masking narrows the
+exposure, it does not remove it.** If the conversation must not reach a third
+party at all, do not run this plugin.
 
 ### Thresholds
 
