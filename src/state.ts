@@ -1,3 +1,4 @@
+import { noRedaction, type Redactor } from './redact.js';
 import type {
   CompactionState,
   FittedState,
@@ -10,6 +11,10 @@ import type {
 
 export const STATE_CONTEXT =
   'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
+
+/** Added only when something was actually masked, so the context costs nothing otherwise. */
+export const REDACTION_CONTEXT =
+  ' Personal data and secrets are masked as `[email_1]`, `[secret_2]` and the like; the same placeholder always stands for the same value.';
 
 /** Successive caps on the serialised tool input included per call. */
 const INPUT_CHARS = [1000, 200, 60] as const;
@@ -92,14 +97,19 @@ export function collectToolCalls(
   return calls;
 }
 
-function inputText(input: Record<string, unknown>, limit: number): string {
+function inputText(
+  input: Record<string, unknown>,
+  limit: number,
+  redact: Redactor,
+): string {
   let json = '';
   try {
     json = JSON.stringify(input);
   } catch {
     json = '[unserializable input]';
   }
-  return truncate(json, limit);
+  // Masked before truncation, so a secret cut in half cannot slip through.
+  return truncate(redact(json), limit);
 }
 
 function resultNote(call: ToolCall): string {
@@ -107,10 +117,11 @@ function resultNote(call: ToolCall): string {
 }
 
 /** One call as a single line, for when the structured form is too costly. */
-function compactCall(call: ToolCall): string {
+function compactCall(call: ToolCall, redact: Redactor): string {
   const input = Object.entries(call.input)
     .map(([key, value]) => {
-      const text = typeof value === 'string' ? value : inputText({ [key]: value }, 200);
+      const text =
+        typeof value === 'string' ? redact(value) : inputText({ [key]: value }, 200, redact);
       return `${key}=${text.replace(/\s+/g, ' ')}`;
     })
     .join(' ');
@@ -152,6 +163,7 @@ function historyEntries(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   inputChars: number,
+  redact: Redactor,
 ): HistoryEntry[] {
   const byMessage = callsByMessage(calls);
   const entries: HistoryEntry[] = [];
@@ -159,11 +171,11 @@ function historyEntries(
     const toolCalls = (byMessage.get(i) ?? []).map((call) => ({
       id: call.id,
       tool: call.tool,
-      input: inputText(call.input, inputChars),
+      input: inputText(call.input, inputChars, redact),
       result: resultNote(call),
     }));
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
-    const entry: HistoryEntry = { i, role: message.role, text: message.text };
+    const entry: HistoryEntry = { i, role: message.role, text: redact(message.text) };
     if (toolCalls.length > 0) entry.tool_calls = toolCalls;
     entries.push(entry);
   });
@@ -171,7 +183,10 @@ function historyEntries(
 }
 
 /** The last three user prompts, as the default `goal`. */
-export function goalFromMessages(messages: readonly Message[]): string {
+export function goalFromMessages(
+  messages: readonly Message[],
+  redact: Redactor = noRedaction(),
+): string {
   return messages
     .filter(
       (message) =>
@@ -180,7 +195,7 @@ export function goalFromMessages(messages: readonly Message[]): string {
         (message.toolResults ?? []).length === 0,
     )
     .slice(-3)
-    .map((message) => truncate(message.text, 500))
+    .map((message) => truncate(redact(message.text), 500))
     .join('\n');
 }
 
@@ -196,15 +211,20 @@ export function fitState(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   options: Pick<ResolvedCompactOptions, 'maxStateTokens' | 'preserveRecentMessages' | 'goal'>,
+  redact: Redactor = noRedaction(),
 ): FittedState {
-  const goal = options.goal || goalFromMessages(messages);
+  const goal = redact(options.goal) || goalFromMessages(messages, redact);
+  // Read late: the count is only final once the history has been built.
   const stateOf = (history: HistoryEntry[]): CompactionState => ({
-    context: STATE_CONTEXT,
+    context: redact.size > 0 ? STATE_CONTEXT + REDACTION_CONTEXT : STATE_CONTEXT,
     goal,
     history,
   });
   const entryTokens = (entry: HistoryEntry): number => estimateTokens(JSON.stringify(entry)) + 1;
-  const baseTokens = estimateTokens(JSON.stringify(stateOf([])));
+  // Budgeted as if masking happened, so the note can be added without overflow.
+  const baseTokens = estimateTokens(
+    JSON.stringify({ context: STATE_CONTEXT + REDACTION_CONTEXT, goal, history: [] }),
+  );
   const fitted = (history: HistoryEntry[], tokens: number, stage: string): FittedState => ({
     state: stateOf(history),
     tokens,
@@ -215,7 +235,7 @@ export function fitState(
   let perEntry: number[] = [];
   let tokens = 0;
   const rebuild = (inputChars: number): void => {
-    history = historyEntries(messages, calls, inputChars);
+    history = historyEntries(messages, calls, inputChars, redact);
     perEntry = history.map(entryTokens);
     tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   };
@@ -270,7 +290,7 @@ export function fitState(
     const own = byMessage.get(entry.i);
     if (pinned(entry) || !own) continue;
     shrink(index, (e) => {
-      e.tool_calls = own.map(compactCall);
+      e.tool_calls = own.map((call) => compactCall(call, redact));
     });
     if (fits()) return fitted(history, tokens, 'old calls compacted');
   }

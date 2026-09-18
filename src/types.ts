@@ -1,3 +1,5 @@
+import type { RedactionLevel, RedactionRule } from './redact.js';
+
 export type Role = 'user' | 'assistant';
 
 /**
@@ -56,11 +58,23 @@ export interface CallAnswer {
 
 export type CallAction = 'keep' | 'drop_result' | 'drop_call';
 
+/**
+ * `protected` is a `drop_call` Jev asked for and the safety rules refused: the
+ * call describes a side effect that re-running would not reproduce, so only its
+ * result is truncated.
+ */
+export type CallReason =
+  | 'pinned'
+  | 'kept'
+  | 'result_dropped'
+  | 'call_dropped'
+  | 'protected';
+
 export interface CallDecision extends CallAnswer {
   id: string;
   tool: string;
   action: CallAction;
-  reason: 'pinned' | 'kept' | 'result_dropped' | 'call_dropped';
+  reason: CallReason;
 }
 
 export interface HistoryToolCall {
@@ -95,8 +109,35 @@ export interface FittedState {
 export interface CompactOptions {
   /** Ongoing task description; defaults to the last few user prompts. */
   goal?: string;
-  /** Minimum keep probability for a call or result to stay. Default 0.5. */
+  /**
+   * Sets both thresholds at once, for callers that want a single knob.
+   * Prefer `keepResultThreshold` / `keepCallThreshold`, which are asymmetric
+   * on purpose. Unset by default.
+   */
   keepThreshold?: number;
+  /**
+   * Below this keep probability a tool result is truncated to its head.
+   * Recoverable: the assistant can re-run the tool. Default 0.4.
+   */
+  keepResultThreshold?: number;
+  /**
+   * Below this keep probability the call itself disappears with its result.
+   * Destructive and irreversible, so the bar to act is deliberately much
+   * lower than for a result. Default 0.15.
+   */
+  keepCallThreshold?: number;
+  /**
+   * Tools whose calls are never removed entirely, only truncated: their input
+   * records a side effect that re-running would not reproduce. Default
+   * `DEFAULT_SIDE_EFFECT_TOOLS`; an `mcp__` prefix is always treated as one.
+   */
+  sideEffectTools?: readonly string[];
+  /** Never remove a call whose result was an error. Default true. */
+  protectErrors?: boolean;
+  /** PII masking of the state sent to Jev. Default 'standard'. */
+  redact?: RedactionLevel;
+  /** Extra redaction rules, appended to the built-in ones. */
+  redactRules?: readonly RedactionRule[];
   /** Newest messages never touched (the first message is always kept). Default 6. */
   preserveRecentMessages?: number;
   /** Estimated token ceiling for the state. Default 25000. */
@@ -109,7 +150,12 @@ export interface CompactOptions {
 
 export interface ResolvedCompactOptions {
   goal: string;
-  keepThreshold: number;
+  keepResultThreshold: number;
+  keepCallThreshold: number;
+  sideEffectTools: readonly string[];
+  protectErrors: boolean;
+  redact: RedactionLevel;
+  redactRules: readonly RedactionRule[];
   preserveRecentMessages: number;
   maxStateTokens: number;
   maxRequestTokens: number;
@@ -129,7 +175,11 @@ export interface CompactResult {
     kept: number;
     resultsDropped: number;
     callsDropped: number;
+    /** Calls Jev wanted removed that the side-effect or error rules kept. */
+    protected: number;
     pinned: number;
+    /** Distinct values masked in the state, per redaction rule. */
+    redactions: Readonly<Record<string, number>>;
     stateTokens: number;
     /** Which fitting stage the state needed, '' when no request was made. */
     stateStage: string;

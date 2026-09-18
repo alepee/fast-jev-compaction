@@ -1,8 +1,10 @@
+import { createRedactor, type Redactor } from './redact.js';
 import { noulAnswer } from './request.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
   CallAnswer,
   CallDecision,
+  CallReason,
   CompactOptions,
   CompactResult,
   CompactionState,
@@ -14,14 +16,49 @@ import type {
   ToolUse,
 } from './types.js';
 
+/**
+ * Tools whose call is never removed outright, only truncated. Their input is
+ * the only record that a side effect happened, and no amount of re-running
+ * brings back what a command did or what an edit replaced.
+ */
+export const DEFAULT_SIDE_EFFECT_TOOLS: readonly string[] = [
+  'Bash',
+  'BashOutput',
+  'KillShell',
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'Task',
+  'Agent',
+  'SlashCommand',
+  'ExitPlanMode',
+];
+
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
-  keepThreshold: 0.5,
+  // Asymmetric on purpose: truncating a result is recoverable by re-running
+  // the tool, removing the call is not. See README, "Thresholds".
+  keepResultThreshold: 0.4,
+  keepCallThreshold: 0.15,
+  sideEffectTools: DEFAULT_SIDE_EFFECT_TOOLS,
+  protectErrors: true,
+  redact: 'standard',
+  redactRules: [],
   preserveRecentMessages: 6,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
 };
+
+/** A tool whose calls the safety rules refuse to remove entirely. */
+export function isSideEffectTool(
+  tool: string,
+  sideEffectTools: readonly string[] = DEFAULT_SIDE_EFFECT_TOOLS,
+): boolean {
+  // An MCP tool is a black box: assume it touched something.
+  return tool.startsWith('mcp__') || sideEffectTools.includes(tool);
+}
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
 const REQUEST_OVERHEAD_TOKENS = 20;
@@ -31,9 +68,24 @@ function finite(value: number | undefined, fallback: number): number {
 }
 
 export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOptions {
+  // `keepThreshold` is the legacy single knob; the split thresholds win over it.
+  const both = typeof options.keepThreshold === 'number' && Number.isFinite(options.keepThreshold)
+    ? options.keepThreshold
+    : undefined;
   return {
     goal: options.goal ?? DEFAULT_OPTIONS.goal,
-    keepThreshold: finite(options.keepThreshold, DEFAULT_OPTIONS.keepThreshold),
+    keepResultThreshold: finite(
+      options.keepResultThreshold ?? both,
+      DEFAULT_OPTIONS.keepResultThreshold,
+    ),
+    keepCallThreshold: finite(
+      options.keepCallThreshold ?? both,
+      DEFAULT_OPTIONS.keepCallThreshold,
+    ),
+    sideEffectTools: options.sideEffectTools ?? DEFAULT_OPTIONS.sideEffectTools,
+    protectErrors: options.protectErrors ?? DEFAULT_OPTIONS.protectErrors,
+    redact: options.redact ?? DEFAULT_OPTIONS.redact,
+    redactRules: options.redactRules ?? DEFAULT_OPTIONS.redactRules,
     preserveRecentMessages: Math.max(
       0,
       Math.floor(
@@ -98,19 +150,30 @@ export function batchCalls(
   return batches;
 }
 
+/**
+ * Two thresholds, not one, and the destructive step needs a far lower
+ * probability than the recoverable one. A call is removed only when Jev is
+ * confident it is dead weight *and* the tool left nothing behind that removing
+ * it would erase.
+ */
 export function decideCall(
-  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'>,
+  call: Pick<ToolCall, 'id' | 'tool' | 'pinned'> & Partial<Pick<ToolCall, 'isError'>>,
   answer: CallAnswer,
-  options: Pick<ResolvedCompactOptions, 'keepThreshold'>,
+  options: CompactOptions = {},
 ): CallDecision {
+  const resolved = resolveOptions(options);
   const base = { id: call.id, tool: call.tool, ...answer };
-  if (call.pinned) return { ...base, action: 'keep', reason: 'pinned' };
-  if (answer.keepResult >= options.keepThreshold) {
+  if (call.pinned) return { ...base, action: 'keep' as const, reason: 'pinned' as CallReason };
+  if (answer.keepResult >= resolved.keepResultThreshold) {
     return { ...base, action: 'keep', reason: 'kept' };
   }
-  if (answer.keepCall >= options.keepThreshold) {
+  if (answer.keepCall >= resolved.keepCallThreshold) {
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
+  const protectedCall =
+    isSideEffectTool(call.tool, resolved.sideEffectTools) ||
+    (resolved.protectErrors && call.isError === true);
+  if (protectedCall) return { ...base, action: 'drop_result', reason: 'protected' };
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
 }
 
@@ -238,6 +301,34 @@ export function messageChars(message: Message): number {
   return total;
 }
 
+/**
+ * The best reduction this transcript could possibly reach, if Jev dropped
+ * every candidate. Cheap, local, and no request: a caller can use it to decide
+ * that a compaction is not worth asking for at all.
+ */
+export function droppableRatio(
+  messages: readonly Message[],
+  options: CompactOptions = {},
+): number {
+  const resolved = resolveOptions(options);
+  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  const total = messages.reduce((sum, message) => sum + messageChars(message), 0);
+  if (total === 0) return 0;
+  const byResultId = new Map<string, number>();
+  for (const message of messages) {
+    for (const result of message.toolResults ?? []) {
+      byResultId.set(result.tool_use_id, result.text.length);
+    }
+  }
+  let droppable = 0;
+  for (const call of calls) {
+    if (call.pinned) continue;
+    const resultChars = byResultId.get(call.tool_use_id) ?? call.resultChars;
+    droppable += Math.max(0, resultChars - resolved.truncateHeadChars);
+  }
+  return droppable / total;
+}
+
 export function reductionRatio(result: Pick<CompactResult, 'stats'>): number {
   const { charsBefore, charsAfter } = result.stats;
   return charsBefore === 0 ? 0 : (charsBefore - charsAfter) / charsBefore;
@@ -265,11 +356,16 @@ export async function compact(
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
+  const redactor: Redactor = createRedactor({
+    level: resolved.redact,
+    extraRules: resolved.redactRules,
+  });
+
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
   if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
+    const state = fitState(messages, calls, resolved, redactor);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const answered = await Promise.all(
@@ -299,7 +395,9 @@ export async function compact(
       kept: count(decisions, 'kept'),
       resultsDropped: count(decisions, 'result_dropped'),
       callsDropped: count(decisions, 'call_dropped'),
+      protected: count(decisions, 'protected'),
       pinned: count(decisions, 'pinned'),
+      redactions: redactor.counts,
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
       requests: batches.length,
