@@ -1,7 +1,7 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "version": "0.4.0",
+  "description": "Verbatim Jev-guided compaction for Claude Code sessions, with PII masking and auto-compaction guards.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
@@ -10,11 +10,34 @@
       "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
       "sensitive": true
     },
-    "keepThreshold": {
+    "keepResultThreshold": {
       "type": "number",
-      "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
-      "default": 0.5
+      "title": "Keep threshold (result)",
+      "description": "Below this Jev probability a tool result is truncated to its head. Recoverable: the assistant can re-run the tool. Lower is more conservative.",
+      "default": 0.4
+    },
+    "keepCallThreshold": {
+      "type": "number",
+      "title": "Keep threshold (call)",
+      "description": "Below this Jev probability the call itself is removed with its result. Irreversible, so keep it well under the result threshold.",
+      "default": 0.15
+    },
+    "redact": {
+      "type": "string",
+      "title": "PII masking",
+      "description": "Masking of the conversation sent to TypeSafe: 'standard' masks secrets, emails, IBANs, cards and account names; 'strict' adds phone numbers and public IPs; 'off' sends it raw. The compacted transcript is always verbatim.",
+      "default": "standard"
+    },
+    "protectErrors": {
+      "type": "boolean",
+      "title": "Protect failed calls",
+      "description": "Never remove a call whose result was an error: the failure is usually the constraint that matters.",
+      "default": true
+    },
+    "sideEffectTools": {
+      "type": "string",
+      "title": "Side-effect tools",
+      "description": "Comma-separated tools whose calls are never removed, only truncated, because re-running would not reproduce what they did. Defaults to Bash, Write, Edit, Task and the like; any mcp__ tool always counts."
     },
     "preserveRecentMessages": {
       "type": "number",
@@ -33,6 +56,24 @@
       "title": "Minimum reduction ratio",
       "description": "Minimum estimated character reduction required to replace history.",
       "default": 0.25
+    },
+    "cooldownTurns": {
+      "type": "number",
+      "title": "Cooldown turns",
+      "description": "Turns to let pass after a compaction before auto-compacting again.",
+      "default": 3
+    },
+    "minPercentDrop": {
+      "type": "number",
+      "title": "Minimum context freed",
+      "description": "Context points a compaction must win back. Below it the trigger is raised above the level that did not pay off, which is what stops a compaction loop.",
+      "default": 5
+    },
+    "maxAutoCompactions": {
+      "type": "number",
+      "title": "Maximum auto-compactions",
+      "description": "Hard stop on auto-compactions in one session.",
+      "default": 8
     },
     "maxStateTokens": {
       "type": "number",

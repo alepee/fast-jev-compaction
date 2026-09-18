@@ -31,7 +31,7 @@ hooks surface before installing or loading it:
 export CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1
 export TYPESAFE_API_KEY="<your TypeSafe key>"
 
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add alepee/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 
@@ -48,14 +48,27 @@ The plugin declares these `userConfig` values in
 
 | Option | Default |
 | --- | ---: |
-| `keepThreshold` | `0.5` |
+| `keepResultThreshold` | `0.4` |
+| `keepCallThreshold` | `0.15` |
+| `redact` | `standard` |
+| `protectErrors` | `true` |
+| `sideEffectTools` | built-in list |
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
+| `cooldownTurns` | `3` |
+| `minPercentDrop` | `5` |
+| `maxAutoCompactions` | `8` |
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
 | `model` | `jev-latest` |
+
+`redact` masks personal data and secrets in the state before it leaves the
+machine; the messages the hook hands back are always the verbatim originals.
+`cooldownTurns`, `minPercentDrop` and `maxAutoCompactions` are the guards that
+keep `turn.complete` from asking for a compaction every turn: see the README,
+[What this fork changes](../README.md#what-this-fork-changes).
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended
