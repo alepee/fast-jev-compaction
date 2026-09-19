@@ -226,7 +226,9 @@ Four guards, all in the hook:
 - Only tool calls and results are candidates; text messages are never removed
   or shortened in the output (they are only abridged in the state Jev sees).
 - Masking is pattern-based. It catches shapes, not meaning: a person's name, a
-  free-text address or an unusual secret format goes through.
+  free-text address or an unusual secret format goes through. What was looked
+  at to close that gap, and why nothing was picked, is in
+  [OPEN-QUESTIONS.md](OPEN-QUESTIONS.md).
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a probability is not a proof that a
   result is safe to delete. The assistant can always re-run the tool.
