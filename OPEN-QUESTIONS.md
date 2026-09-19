@@ -5,7 +5,7 @@
 Tracking the gap the current masking leaves, and what was looked at, so the
 next person does not redo the survey.
 
-## What is covered today
+### What is covered today
 
 Two layers, both on the state only, never on the compacted transcript:
 
@@ -18,13 +18,13 @@ Two layers, both on the state only, never on the compacted transcript:
 
 Both work on **shape**. That is why they work with no model and no runtime.
 
-## What is not covered
+### What is not covered
 
 Anything whose shape carries no signal, which in practice means **identities**:
 a person's name, an organisation, a place, a free-text postal address. A
 transcript that says "call Marie about the Dupont account" goes out as is.
 
-## Options looked at, with verified numbers
+### Options looked at, with verified numbers
 
 | Option | Weight | Runtime |
 | --- | ---: | --- |
@@ -37,7 +37,7 @@ transcript that says "call Marie about the Dupont account" goes out as is.
 Weight turned out not to be the deciding factor: Presidio on the small model is
 13 MB, and ONNX in Node removes the Python dependency entirely.
 
-## Why none of them is in
+### Why none of them is in
 
 **False positives on code.** Every candidate above is an NER model, and NER on a
 coding transcript flags identifiers: a `Jackson` class, a `Faker` library, a
@@ -48,14 +48,14 @@ be worse than the disease at the current level of accuracy.
 A second, smaller reason: a hook cannot load native bindings, so any of these
 runs as a sidecar through `$.process.run` anyway.
 
-## What would change the decision
+### What would change the decision
 
 - A detector with usable precision on source code, rather than on prose.
 - Or an offline pass: run a heavy detector rarely, off the hot path, to
   *propose* values that a human approves once, and let the hot path do exact
   matching only. That splits precision from recall instead of trading them.
 
-## Where it would plug in
+### Where it would plug in
 
 `createRedactor({ literals })` in `src/redact.ts`. It takes literal values and
 masks them with the same stable placeholders as everything else, which is how
