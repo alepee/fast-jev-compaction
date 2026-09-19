@@ -5,6 +5,10 @@ every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
 library.
 
+> Fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
+> adding PII masking of what leaves the machine, asymmetric keep thresholds, and
+> guards against compaction loops. See [What this fork changes](#what-this-fork-changes).
+
 ## What and why
 
 Most context compaction asks an LLM to summarize old turns. A summary is
@@ -36,6 +40,16 @@ built-in compaction summary with the original messages.
    does not fit, compaction throws. Tokens are estimated without a tokenizer (a
    word per six letters, half a token per digit, ~one per other symbol),
    calibrated to land a little above the counts Jev reports.
+3b. Personal data and secrets in that state are masked before it leaves the
+   machine: emails, API tokens, JWTs, private keys, `key=value` secrets, URL
+   credentials, IBANs, Luhn-valid card numbers and the account name in a home
+   path, plus phone numbers and public IPs under `redact: 'strict'`. Each
+   distinct value gets a stable placeholder (`[email_1]`), so Jev still sees
+   that two mentions are the same thing. Masking is one-way and applies only to
+   the state: **the compacted transcript is always the verbatim original**.
+   With `gitleaks: true` the local gitleaks binary scans the same text first
+   and every value it reports is masked too, which covers the secrets no
+   pattern of ours would recognise.
 4. For every non-pinned call Jev gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
@@ -44,11 +58,14 @@ built-in compaction summary with the original messages.
    stays under `maxRequestTokens` (30k by default, under Jev's 32k request
    limit). The same full state is resent with every request; requests run
    concurrently and their answers are merged.
-6. Decisions per call, against `keepThreshold`:
-   - `keepResult ≥ threshold` → keep call and result;
-   - else `keepCall ≥ threshold` → keep the call, truncate the result to its
-     first `truncateHeadChars` characters plus a one-line note;
-   - else → remove the call together with its result.
+6. Decisions per call, against two thresholds (see [Thresholds](#thresholds)):
+   - `keepResult ≥ keepResultThreshold` (0.4) → keep call and result;
+   - else `keepCall ≥ keepCallThreshold` (0.15) → keep the call, truncate the
+     result to its first `truncateHeadChars` characters plus a one-line note;
+   - else, unless the call is protected → remove the call with its result.
+   A call is protected, and so only truncated, when its tool changed something
+   (`Bash`, `Write`, `Edit`, `Task`, any `mcp__*`) or when its result was an
+   error.
 7. The message list is rebuilt: a message that loses all its content is
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
@@ -105,20 +122,111 @@ put it in a source file.
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
+| `redact` | `'standard'` | PII masking of the state: `off`, `standard`, `strict` |
+| `redactRules` | `[]` | Extra masking rules, appended to the built-in ones |
+| `redactLiterals` | `[]` | Literal values to mask, whatever their shape (what a gitleaks scan fills) |
+| `keepResultThreshold` | `0.4` | Below it, a tool result is truncated to its head |
+| `keepCallThreshold` | `0.15` | Below it, the call itself is removed. Irreversible |
+| `keepThreshold` | unset | Legacy single knob; sets both thresholds |
+| `sideEffectTools` | `DEFAULT_SIDE_EFFECT_TOOLS` | Tools whose calls are truncated, never removed |
+| `protectErrors` | `true` | Never remove a call whose result was an error |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 
 `result.stats` reports message and character counts before and after, the
-per-reason decision counts, the state size in estimated tokens, which fitting
+per-reason decision counts (including `protected`), the distinct values masked
+per rule in `redactions`, the state size in estimated tokens, which fitting
 stage was needed, and the number of requests.
+
+`droppableRatio(messages, options)` answers, without any request, the best
+reduction a compaction of this transcript could reach.
+
+`scanForSecrets(messages, run, options)` runs `gitleaks stdin` through an
+injected process runner and returns the values to mask; it never throws, so a
+missing binary degrades to the built-in patterns.
+
+## What this fork changes
+
+Three things, from an audit of the upstream design.
+
+### Privacy
+
+Upstream sends the whole conversation to `api.typesafe.ai` on every compaction,
+and resends it with every request of the batch: prompts, assistant text and
+tool inputs, so file paths, commands and queries too. Only tool *outputs* are
+replaced by a note. That is a third party in the chain, and nothing said so.
+
+This fork masks the state before it leaves the machine (`redact`, `standard` by
+default) and reports what it masked in `stats.redactions` and in the toast.
+
+Two layers, because they catch different things:
+
+- **Built-in patterns**, always on, no dependency: emails, API tokens with a
+  known prefix, JWTs, private keys, `key=value` secrets, URL credentials,
+  IBANs, Luhn-valid cards, the account name in a home path.
+- **gitleaks** (`gitleaks: true`), opt-in: the local binary reads the same text
+  on stdin and reports every secret its rules match, which the redactor then
+  masks as literal values. Hundreds of maintained rules instead of our dozen,
+  one static binary, no model to load, and nothing leaves the machine. When it
+  is not installed the run says so in the log and the patterns carry on alone.
+
+The two layers catch different things, which is the point. gitleaks found a
+`sk_live_` Stripe key the built-in patterns missed (they expect a hyphen);
+the patterns caught a `AIza` Google key gitleaks let through on the same run.
+Note that gitleaks scores entropy and exact lengths, so it stays quiet on
+made-up placeholders: testing it with `sk-test-1234` will look like a failure
+and is not one.
+
+An NER detector (Presidio and the like) would add what neither layer has,
+names and places, at the cost of a Python runtime and a several-hundred-
+megabyte model load on a path that has to stay fast. Deliberately left out for
+now; the `literals` seam in `redact.ts` is where such a backend would plug in.
+
+What masking does not do: recognise a person's name, or spot a secret with no
+recognisable shape that gitleaks does not know either. **Masking narrows the
+exposure, it does not remove it.** If the conversation must not reach a third
+party at all, do not run this plugin.
+
+### Thresholds
+
+Upstream used one threshold at `0.5` for both decisions. Two problems: the test
+is `keep >= threshold`, so raising the number makes pruning *more* aggressive,
+not less — easy to get backwards; and it treats truncating a result (the
+assistant re-runs the tool) and deleting a call (the record is gone) as the same
+risk.
+
+They are now separate and asymmetric: `keepResultThreshold` 0.4,
+`keepCallThreshold` 0.15. On top of that, a call is never deleted outright when
+its tool had a side effect or its result was an error — it is truncated
+instead, and reported as `protected`. The old single `keepThreshold` still
+works and sets both.
+
+### Compaction loops
+
+Upstream's `turn.complete` asked for a compaction whenever the context was over
+`compactAtPercent`. If the compaction did not bring it back under, the next turn
+asked again, and every attempt costs a full round of Jev requests.
+
+Four guards, all in the hook:
+
+- a **pre-flight**: `droppableRatio()` computes locally the best reduction this
+  transcript could reach; under `minReductionRatio`, the hook falls back to the
+  built-in summary without calling Jev at all;
+- a **cooldown** of `cooldownTurns` turns after each compaction;
+- an **escalating trigger**: a compaction that frees less than `minPercentDrop`
+  context points raises the trigger above where the context now sits, so the
+  next attempt waits for real growth;
+- a **cap** of `maxAutoCompactions` per session, and a full stop once the
+  trigger reaches 95%.
 
 ## Limitations
 
 - Only tool calls and results are candidates; text messages are never removed
   or shortened in the output (they are only abridged in the state Jev sees).
+- Masking is pattern-based. It catches shapes, not meaning: a person's name, a
+  free-text address or an unusual secret format goes through.
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a probability is not a proof that a
   result is safe to delete. The assistant can always re-run the tool.
@@ -146,7 +254,7 @@ Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
 ```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
+claude plugin marketplace add alepee/fast-jev-compaction
 claude plugin install fast-jev-compaction@fast-jev-compaction
 ```
 

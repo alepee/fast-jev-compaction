@@ -8,7 +8,8 @@ import type {
   TurnCompleteInput,
 } from 'claude-code';
 
-import { compact, reductionRatio, resolveOptions } from '../src/compact.js';
+import { compact, droppableRatio, reductionRatio, resolveOptions } from '../src/compact.js';
+import { scanForSecrets, type GitleaksOptions, type ProcessRunner } from '../src/gitleaks.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
   CompactOptions,
@@ -22,6 +23,17 @@ import type {
 const HOOK_DEFAULTS = {
   compactAtPercent: 60,
   minReductionRatio: 0.25,
+  /** Turns to let pass after a compaction before auto-compacting again. */
+  cooldownTurns: 3,
+  /**
+   * Context points a compaction must win back for auto-compaction to stay at
+   * the same trigger. Below it, the trigger is raised above the level that did
+   * not pay off, so the next attempt only comes when the context has really
+   * grown. This is what stops a session from compacting every single turn.
+   */
+  minPercentDrop: 5,
+  /** Hard stop on auto-compactions in one session. */
+  maxAutoCompactions: 8,
   model: DEFAULT_MODEL,
 };
 
@@ -42,8 +54,15 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
+  /** Scan the state with gitleaks before sending it. Off unless configured. */
+  gitleaks: boolean;
+  gitleaksBinary?: string;
+  gitleaksConfig?: string;
   compactAtPercent: number;
   minReductionRatio: number;
+  cooldownTurns: number;
+  minPercentDrop: number;
+  maxAutoCompactions: number;
   model: string;
 };
 
@@ -59,9 +78,11 @@ function optionString(options: PluginOptions, key: string): string | undefined {
 
 /** Reads the plugin's `userConfig` values; anything missing takes the defaults. */
 export function resolveHookConfig(options: PluginOptions): HookConfig {
-  const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
+  const numbers: Record<string, number> = {};
   for (const key of [
     'keepThreshold',
+    'keepResultThreshold',
+    'keepCallThreshold',
     'preserveRecentMessages',
     'maxStateTokens',
     'maxRequestTokens',
@@ -71,15 +92,44 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
   }
   const config: HookConfig = {
-    ...numbers,
+    ...(numbers as Partial<CompactOptions>),
     compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
       'minReductionRatio',
       HOOK_DEFAULTS.minReductionRatio,
     ),
+    cooldownTurns: Math.max(
+      0,
+      optionNumber(options, 'cooldownTurns', HOOK_DEFAULTS.cooldownTurns),
+    ),
+    minPercentDrop: Math.max(
+      0,
+      optionNumber(options, 'minPercentDrop', HOOK_DEFAULTS.minPercentDrop),
+    ),
+    maxAutoCompactions: Math.max(
+      0,
+      optionNumber(options, 'maxAutoCompactions', HOOK_DEFAULTS.maxAutoCompactions),
+    ),
+    gitleaks: options['gitleaks'] === true,
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  const gitleaksBinary = optionString(options, 'gitleaksBinary');
+  if (gitleaksBinary) config.gitleaksBinary = gitleaksBinary;
+  const gitleaksConfig = optionString(options, 'gitleaksConfig');
+  if (gitleaksConfig) config.gitleaksConfig = gitleaksConfig;
+  const redact = optionString(options, 'redact');
+  if (redact === 'off' || redact === 'standard' || redact === 'strict') config.redact = redact;
+  const sideEffectTools = optionString(options, 'sideEffectTools');
+  if (sideEffectTools) {
+    config.sideEffectTools = sideEffectTools
+      .split(',')
+      .map((tool) => tool.trim())
+      .filter(Boolean);
+  }
+  if (typeof options['protectErrors'] === 'boolean') {
+    config.protectErrors = options['protectErrors'];
+  }
   const apiKey = optionString(options, 'apiKey');
   if (apiKey) config.apiKey = apiKey;
   const goal = optionString(options, 'goal');
@@ -161,6 +211,32 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
+/**
+ * Asks gitleaks for the secrets in what is about to be sent, so the redactor
+ * can mask values no pattern of ours would recognise. A missing binary is not
+ * an error: the built-in rules still run, and the caller logs why.
+ */
+export async function withScannedSecrets(
+  messages: readonly SessionMessage[],
+  config: HookConfig,
+  run: ProcessRunner | undefined,
+): Promise<{ config: HookConfig; note?: string }> {
+  if (!config.gitleaks || !run) return { config };
+  const options: GitleaksOptions = {};
+  if (config.gitleaksBinary) options.binary = config.gitleaksBinary;
+  if (config.gitleaksConfig) options.config = config.gitleaksConfig;
+  const scan = await scanForSecrets(messages, run, options);
+  if (scan.skipped) return { config, note: scan.skipped };
+  if (scan.secrets.length === 0) return { config };
+  return {
+    config: {
+      ...config,
+      redactLiterals: [...(config.redactLiterals ?? []), ...scan.secrets],
+    },
+    note: `gitleaks masked ${scan.secrets.length} secret(s)`,
+  };
+}
+
 /** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
 export async function compactSession(
   messages: readonly SessionMessage[],
@@ -176,17 +252,28 @@ function percent(ratio: number): string {
   return `${Math.round(ratio * 100)}%`;
 }
 
+/** `3 email, 1 secret`, or '' when nothing was masked. */
+export function redactionSummary(result: CompactResult): string {
+  return Object.entries(result.stats.redactions)
+    .map(([name, n]) => `${n} ${name}`)
+    .join(', ');
+}
+
 export function summarize(result: CompactResult): string {
   const { stats } = result;
+  const masked = redactionSummary(result);
   const parts = [
     stats.kept > 0 ? `${stats.kept} kept` : '',
     stats.resultsDropped > 0 ? `${stats.resultsDropped} results truncated` : '',
+    stats.protected > 0 ? `${stats.protected} protected` : '',
     stats.callsDropped > 0 ? `${stats.callsDropped} call_dropped` : '',
     stats.pinned > 0 ? `${stats.pinned} pinned` : '',
   ].filter(Boolean);
   return `${percent(reductionRatio(result))} reduction; ${
     parts.join(', ') || 'no tool calls'
-  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)`;
+  }; state ~${stats.stateTokens} tokens (${stats.stateStage}) in ${stats.requests} request(s)${
+    masked ? `; masked ${masked}` : ''
+  }`;
 }
 
 const UI_LOG_MAX_CHARS = 4096;
@@ -256,14 +343,101 @@ function notify(
   $.ui.toast(text, { timeoutMs: 15_000 });
 }
 
+/**
+ * Everything that keeps auto-compaction from firing turn after turn. Held per
+ * session in the closure: a cooldown, a trigger that climbs when a compaction
+ * did not win context back, and a hard cap.
+ */
+export interface AutoCompactState {
+  turnsSinceCompaction: number;
+  compactions: number;
+  /** Trigger in force, raised above a context level that did not pay off. */
+  trigger: number;
+  /** Context percent right after the last compaction, or undefined. */
+  lastPercentAfter?: number;
+  /** Set once the guards give up on this session. */
+  disabledReason?: string;
+}
+
+export function initialAutoCompactState(config: HookConfig): AutoCompactState {
+  return { turnsSinceCompaction: Number.POSITIVE_INFINITY, compactions: 0, trigger: config.compactAtPercent };
+}
+
+export type AutoCompactVerdict =
+  | { compact: true }
+  | { compact: false; reason?: string };
+
+/** Decides whether this turn should ask for a compaction. Pure, so it is testable. */
+export function shouldAutoCompact(
+  state: AutoCompactState,
+  percent: number,
+  config: HookConfig,
+): AutoCompactVerdict {
+  if (state.disabledReason) return { compact: false };
+  if (state.compactions >= config.maxAutoCompactions) {
+    return {
+      compact: false,
+      reason: `auto-compaction off for this session (${config.maxAutoCompactions} compactions already)`,
+    };
+  }
+  if (state.turnsSinceCompaction < config.cooldownTurns) return { compact: false };
+  if (percent < state.trigger) return { compact: false };
+  return { compact: true };
+}
+
+/**
+ * Records what a compaction actually won back. A compaction that did not free
+ * `minPercentDrop` points pushes the trigger above where the context now sits,
+ * so the next one waits for real growth instead of firing on the next turn.
+ */
+export function noteCompaction(
+  state: AutoCompactState,
+  percentBefore: number,
+  percentAfter: number,
+  config: HookConfig,
+): AutoCompactState {
+  const next: AutoCompactState = {
+    ...state,
+    compactions: state.compactions + 1,
+    turnsSinceCompaction: 0,
+    lastPercentAfter: percentAfter,
+  };
+  if (percentBefore - percentAfter < config.minPercentDrop) {
+    next.trigger = Math.min(95, Math.max(state.trigger, percentAfter + config.minPercentDrop));
+    if (next.trigger >= 95) {
+      next.disabledReason = 'compaction stopped freeing context';
+    }
+  }
+  return next;
+}
+
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
+  let auto = initialAutoCompactState(configured);
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
-      const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
+      // Local, free, and no request: if even a perfect run could not reach the
+      // minimum, fall back now instead of paying Jev to tell us so.
+      const ceiling = droppableRatio(event.messages, config);
+      if (ceiling < config.minReductionRatio) {
+        notify(
+          $,
+          `fallback to built-in summary (at most ${percent(ceiling)} removable, below the ${percent(
+            config.minReductionRatio,
+          )} minimum; Jev not called)`,
+        );
+        return next(event);
+      }
+      // Wrapped rather than passed: the engine's nouns are only ever called
+      // in place, never handed around as values.
+      const scanned = await withScannedSecrets(event.messages, config, (argv, init) =>
+        $.process.run(argv, init),
+      );
+      if (scanned.note) $.ui.log(scanned.note);
+      const { result, messages } = await compactSession(event.messages, scanned.config, async (url, init) => {
         const response = await $.http.fetch(url, init);
         return { status: response.status, ok: response.ok, text: response.text };
       });
@@ -291,11 +465,27 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (compacting) return next(event);
+    auto = { ...auto, turnsSinceCompaction: auto.turnsSinceCompaction + 1 };
     try {
-      const { context } = await $.session.usage();
-      if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
+      const before = (await $.session.usage()).context.percent ?? 0;
+      const verdict = shouldAutoCompact(auto, before, configured);
+      if (!verdict.compact) {
+        if (verdict.reason) $.ui.log(verdict.reason);
+        return next(event);
+      }
       compacting = true;
       await $.session.compact();
+      const after = (await $.session.usage()).context.percent ?? before;
+      const previous = auto;
+      auto = noteCompaction(auto, before, after, configured);
+      if (auto.trigger !== previous.trigger) {
+        $.ui.log(
+          `auto-compaction trigger raised to ${auto.trigger}% (${before}% → ${after}%, under the ${configured.minPercentDrop}-point minimum)`,
+        );
+      }
+      if (auto.disabledReason && !previous.disabledReason) {
+        notify($, `auto-compaction disabled for this session: ${auto.disabledReason}`);
+      }
     } catch (error) {
       $.ui.log(
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,

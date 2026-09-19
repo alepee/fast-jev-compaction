@@ -74,7 +74,10 @@ const fit = {
 describe('options', () => {
   it('fills in defaults and ignores non-finite values', () => {
     expect(resolveOptions()).toMatchObject({
-      keepThreshold: 0.5,
+      keepResultThreshold: 0.4,
+      keepCallThreshold: 0.15,
+      protectErrors: true,
+      redact: 'standard',
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
       maxRequestTokens: 30_000,
@@ -85,9 +88,21 @@ describe('options', () => {
       preserveRecentMessages: 2.7,
       truncateHeadChars: -1.2,
     })).toMatchObject({
-      keepThreshold: 0.5,
+      keepResultThreshold: 0.4,
+      keepCallThreshold: 0.15,
       preserveRecentMessages: 2,
       truncateHeadChars: 0,
+    });
+  });
+
+  it('lets the legacy keepThreshold set both thresholds, and the split ones win', () => {
+    expect(resolveOptions({ keepThreshold: 0.5 })).toMatchObject({
+      keepResultThreshold: 0.5,
+      keepCallThreshold: 0.5,
+    });
+    expect(resolveOptions({ keepThreshold: 0.5, keepCallThreshold: 0.1 })).toMatchObject({
+      keepResultThreshold: 0.5,
+      keepCallThreshold: 0.1,
     });
   });
 });
@@ -153,10 +168,10 @@ describe('state fitting', () => {
     ];
     const { state, stage, tokens } = fitState(messages, collectToolCalls(messages, 0), {
       ...fit,
-      maxStateTokens: 300,
+      maxStateTokens: 360,
     });
     expect(stage).toBe('inputs<=200');
-    expect(tokens).toBeLessThanOrEqual(300);
+    expect(tokens).toBeLessThanOrEqual(360);
     expect(state.history[0]?.text).toBe('start');
     expect((state.history[1]?.tool_calls?.[0] as HistoryToolCall).input.length).toBeLessThanOrEqual(200);
   });

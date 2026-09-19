@@ -3,7 +3,10 @@ import {
   compactSession,
   decisionLog,
   decisionLogLines,
+  initialAutoCompactState,
+  noteCompaction,
   resolveHookConfig,
+  shouldAutoCompact,
   summarize,
   toSessionMessages,
 } from '../hooks/fast-jev.ts';
@@ -53,18 +56,47 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
-    expect(resolveHookConfig({})).toEqual({ compactAtPercent: 60, minReductionRatio: 0.25, model: 'jev-latest' });
+    expect(resolveHookConfig({})).toEqual({
+      gitleaks: false,
+      compactAtPercent: 60,
+      minReductionRatio: 0.25,
+      cooldownTurns: 3,
+      minPercentDrop: 5,
+      maxAutoCompactions: 8,
+      model: 'jev-latest',
+    });
     expect(
-      resolveHookConfig({ apiKey: 'k', keepThreshold: 0.3, maxStateTokens: 1000, model: 'jev-x', goal: 'g', compactAtPercent: 'no' }),
+      resolveHookConfig({
+        apiKey: 'k',
+        keepCallThreshold: 0.3,
+        maxStateTokens: 1000,
+        model: 'jev-x',
+        goal: 'g',
+        compactAtPercent: 'no',
+        redact: 'strict',
+        sideEffectTools: 'Bash, Deploy',
+        protectErrors: false,
+      }),
     ).toEqual({
       apiKey: 'k',
-      keepThreshold: 0.3,
+      gitleaks: false,
+      keepCallThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',
       goal: 'g',
       compactAtPercent: 60,
       minReductionRatio: 0.25,
+      cooldownTurns: 3,
+      minPercentDrop: 5,
+      maxAutoCompactions: 8,
+      redact: 'strict',
+      sideEffectTools: ['Bash', 'Deploy'],
+      protectErrors: false,
     });
+  });
+
+  it('ignores a redaction level it does not know', () => {
+    expect(resolveHookConfig({ redact: 'maybe' }).redact).toBeUndefined();
   });
 });
 
@@ -133,7 +165,7 @@ describe('compactSession', () => {
     const lines = decisionLogLines(output, 60);
     expect(lines).toEqual([
       'decisions (1/2): t1:Read:drop_call/call=0.10/result=0.10',
-      'decisions (2/2): t2:Bash:drop_call/call=0.10/result=0.10',
+      'decisions (2/2): t2:Bash:drop_result/call=0.10/result=0.10',
     ]);
     expect(lines.every((line) => line.length <= 60)).toBe(true);
     expect(decisionLogLines({ ...output, decisions: [] })).toEqual(['decisions: (none)']);
@@ -145,5 +177,48 @@ describe('compactSession', () => {
     await expect(
       compactSession(transcript(), { ...config, apiKey: 'k' }, async () => ({ status: 500, ok: false, text: 'x' })),
     ).rejects.toThrow(/500/);
+  });
+});
+
+describe('auto-compaction guards', () => {
+  const config = resolveHookConfig({});
+
+  it('waits for the cooldown, the trigger, and the session cap', () => {
+    const fresh = initialAutoCompactState(config);
+    expect(shouldAutoCompact(fresh, 59, config).compact).toBe(false);
+    expect(shouldAutoCompact(fresh, 61, config).compact).toBe(true);
+    // Just compacted: three turns of quiet before asking again.
+    expect(shouldAutoCompact({ ...fresh, turnsSinceCompaction: 1 }, 99, config).compact).toBe(false);
+    expect(shouldAutoCompact({ ...fresh, turnsSinceCompaction: 3 }, 99, config).compact).toBe(true);
+    const capped = { ...fresh, compactions: config.maxAutoCompactions };
+    expect(shouldAutoCompact(capped, 99, config)).toMatchObject({ compact: false });
+    expect(shouldAutoCompact(capped, 99, config).compact).toBe(false);
+  });
+
+  it('leaves the trigger alone when a compaction actually frees context', () => {
+    const after = noteCompaction(initialAutoCompactState(config), 80, 40, config);
+    expect(after.trigger).toBe(60);
+    expect(after.compactions).toBe(1);
+    expect(after.turnsSinceCompaction).toBe(0);
+    expect(after.disabledReason).toBeUndefined();
+  });
+
+  it('raises the trigger above a context level that compaction could not bring down', () => {
+    // 82% in, 80% out: two points is not worth doing again at 60%.
+    const after = noteCompaction(initialAutoCompactState(config), 82, 80, config);
+    expect(after.trigger).toBe(85);
+    expect(shouldAutoCompact({ ...after, turnsSinceCompaction: 9 }, 81, config).compact).toBe(false);
+    expect(shouldAutoCompact({ ...after, turnsSinceCompaction: 9 }, 86, config).compact).toBe(true);
+  });
+
+  it('gives up on the session once the trigger has climbed to the ceiling', () => {
+    let state = initialAutoCompactState(config);
+    for (let i = 0; i < 6; i += 1) {
+      const percent = Math.min(94, state.trigger + 1);
+      state = noteCompaction(state, percent, percent, config);
+    }
+    expect(state.trigger).toBe(95);
+    expect(state.disabledReason).toBe('compaction stopped freeing context');
+    expect(shouldAutoCompact(state, 99, config).compact).toBe(false);
   });
 });
