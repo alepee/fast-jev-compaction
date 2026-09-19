@@ -37,8 +37,8 @@
     "gitleaks": {
       "type": "boolean",
       "title": "Scan with gitleaks",
-      "description": "Run the local gitleaks binary over the conversation before sending it, and mask every secret it finds. Needs gitleaks on PATH; when it is missing the built-in patterns still apply.",
-      "default": false
+      "description": "Scan the conversation with the local gitleaks binary before sending it, and mask every secret it finds. On when gitleaks is installed; when it is not, the built-in patterns still apply and the session stops trying. Set to false to never run it.",
+      "default": true
     },
     "gitleaksBinary": {
       "type": "string",

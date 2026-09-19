@@ -54,7 +54,10 @@ export type HookFetch = (url: string, init?: HookFetchInit) => Promise<HookFetch
 
 export type HookConfig = CompactOptions & {
   apiKey?: string;
-  /** Scan the state with gitleaks before sending it. Off unless configured. */
+  /**
+   * Scan the state with gitleaks before sending it. On by default and skipped
+   * when the binary is not installed; set it to false to never try.
+   */
   gitleaks: boolean;
   gitleaksBinary?: string;
   gitleaksConfig?: string;
@@ -111,7 +114,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       0,
       optionNumber(options, 'maxAutoCompactions', HOOK_DEFAULTS.maxAutoCompactions),
     ),
-    gitleaks: options['gitleaks'] === true,
+    gitleaks: options['gitleaks'] !== false,
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
   const gitleaksBinary = optionString(options, 'gitleaksBinary');
@@ -212,20 +215,40 @@ export type SessionCompaction = {
 };
 
 /**
+ * Remembers, for the session, that the binary is not there. A missing gitleaks
+ * will not appear between two compactions, so asking again every time would
+ * only cost a failed spawn and repeat the same line in the log.
+ */
+export interface GitleaksState {
+  available?: boolean;
+  warned?: boolean;
+}
+
+/**
  * Asks gitleaks for the secrets in what is about to be sent, so the redactor
- * can mask values no pattern of ours would recognise. A missing binary is not
- * an error: the built-in rules still run, and the caller logs why.
+ * can mask values no pattern of ours would recognise. Enabled by default and
+ * never required: with no binary installed the built-in rules still run, the
+ * reason is logged once, and later compactions do not try again.
  */
 export async function withScannedSecrets(
   messages: readonly SessionMessage[],
   config: HookConfig,
   run: ProcessRunner | undefined,
+  state: GitleaksState = {},
 ): Promise<{ config: HookConfig; note?: string }> {
-  if (!config.gitleaks || !run) return { config };
+  if (!config.gitleaks || !run || state.available === false) return { config };
   const options: GitleaksOptions = {};
   if (config.gitleaksBinary) options.binary = config.gitleaksBinary;
   if (config.gitleaksConfig) options.config = config.gitleaksConfig;
   const scan = await scanForSecrets(messages, run, options);
+  if (scan.unavailable) {
+    state.available = false;
+    // Said once, then never again for this session.
+    if (state.warned) return { config };
+    state.warned = true;
+    return { config, note: scan.skipped };
+  }
+  state.available = true;
   if (scan.skipped) return { config, note: scan.skipped };
   if (scan.secrets.length === 0) return { config };
   return {
@@ -414,6 +437,7 @@ export function noteCompaction(
 export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let auto = initialAutoCompactState(configured);
+  const gitleaks: GitleaksState = {};
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
@@ -433,8 +457,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
       }
       // Wrapped rather than passed: the engine's nouns are only ever called
       // in place, never handed around as values.
-      const scanned = await withScannedSecrets(event.messages, config, (argv, init) =>
-        $.process.run(argv, init),
+      const scanned = await withScannedSecrets(
+        event.messages,
+        config,
+        (argv, init) => $.process.run(argv, init),
+        gitleaks,
       );
       if (scanned.note) $.ui.log(scanned.note);
       const { result, messages } = await compactSession(event.messages, scanned.config, async (url, init) => {

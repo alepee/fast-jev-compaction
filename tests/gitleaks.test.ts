@@ -142,4 +142,28 @@ describe('gitleaks in the hook', () => {
       .toBeUndefined();
     expect((await withScannedSecrets(transcript, base, undefined)).config.redactLiterals).toBeUndefined();
   });
+
+  it('stops trying, and stops saying so, once the binary turns out to be missing', async () => {
+    const run = vi.fn<ProcessRunner>(async () => {
+      throw new Error('spawn gitleaks ENOENT');
+    });
+    const state = {};
+    const first = await withScannedSecrets(transcript, base, run, state);
+    expect(first.note).toContain('not available');
+    expect(state).toEqual({ available: false, warned: true });
+
+    // Second compaction of the same session: no spawn, no repeated line.
+    const second = await withScannedSecrets(transcript, base, run, state);
+    expect(second.note).toBeUndefined();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps trying after a run that merely failed, which a config can fix', async () => {
+    const run = vi.fn<ProcessRunner>(async () => ({ exitCode: 2, stdout: '', stderr: 'bad config' }));
+    const state = {};
+    expect((await withScannedSecrets(transcript, base, run, state)).note).toContain('bad config');
+    expect(state).toEqual({ available: true });
+    await withScannedSecrets(transcript, base, run, state);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
 });

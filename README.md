@@ -47,9 +47,9 @@ built-in compaction summary with the original messages.
    distinct value gets a stable placeholder (`[email_1]`), so Jev still sees
    that two mentions are the same thing. Masking is one-way and applies only to
    the state: **the compacted transcript is always the verbatim original**.
-   With `gitleaks: true` the local gitleaks binary scans the same text first
-   and every value it reports is masked too, which covers the secrets no
-   pattern of ours would recognise.
+   When gitleaks is installed it scans the same text first and every value it
+   reports is masked too, which covers the secrets no pattern of ours would
+   recognise.
 4. For every non-pinned call Jev gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
@@ -166,11 +166,12 @@ Two layers, because they catch different things:
 - **Built-in patterns**, always on, no dependency: emails, API tokens with a
   known prefix, JWTs, private keys, `key=value` secrets, URL credentials,
   IBANs, Luhn-valid cards, the account name in a home path.
-- **gitleaks** (`gitleaks: true`), opt-in: the local binary reads the same text
-  on stdin and reports every secret its rules match, which the redactor then
-  masks as literal values. Hundreds of maintained rules instead of our dozen,
-  one static binary, no model to load, and nothing leaves the machine. When it
-  is not installed the run says so in the log and the patterns carry on alone.
+- **gitleaks**, on whenever the binary is installed: it reads the same text on
+  stdin and reports every secret its rules match, which the redactor then masks
+  as literal values. Hundreds of maintained rules instead of our dozen, one
+  static binary, no model to load, and nothing leaves the machine. With no
+  gitleaks on the machine the first compaction says so once and the session
+  stops trying; `gitleaks: false` never runs it at all.
 
 The two layers catch different things, which is the point. gitleaks found a
 `sk_live_` Stripe key the built-in patterns missed (they expect a hyphen);

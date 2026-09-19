@@ -58,6 +58,12 @@ export interface GitleaksScan {
   findings: GitleaksFinding[];
   /** Why no scan happened, when `secrets` is empty for a reason worth logging. */
   skipped?: string;
+  /**
+   * The binary could not start at all, as opposed to a run that failed. The
+   * caller uses this to stop retrying for the rest of the session: a missing
+   * binary will not appear between two compactions, a failing config might.
+   */
+  unavailable?: boolean;
 }
 
 const EMPTY: GitleaksScan = { secrets: [], findings: [] };
@@ -146,9 +152,12 @@ export async function scanForSecrets(
       ...(options.cwd ? { cwd: options.cwd } : {}),
     });
   } catch (error) {
+    // `$.process.run` rejects when the command cannot start, which is what a
+    // missing binary looks like.
     return {
       ...EMPTY,
-      skipped: `gitleaks unavailable (${error instanceof Error ? error.message : String(error)})`,
+      unavailable: true,
+      skipped: `gitleaks not available (${error instanceof Error ? error.message : String(error)})`,
     };
   }
   const findings = parseGitleaksReport(result.stdout);

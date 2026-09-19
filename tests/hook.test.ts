@@ -57,7 +57,7 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({
-      gitleaks: false,
+      gitleaks: true,
       compactAtPercent: 60,
       minReductionRatio: 0.25,
       cooldownTurns: 3,
@@ -79,7 +79,7 @@ describe('hook config', () => {
       }),
     ).toEqual({
       apiKey: 'k',
-      gitleaks: false,
+      gitleaks: true,
       keepCallThreshold: 0.3,
       maxStateTokens: 1000,
       model: 'jev-x',
@@ -97,6 +97,12 @@ describe('hook config', () => {
 
   it('ignores a redaction level it does not know', () => {
     expect(resolveHookConfig({ redact: 'maybe' }).redact).toBeUndefined();
+  });
+
+  it('only turns gitleaks off on an explicit false', () => {
+    expect(resolveHookConfig({ gitleaks: false }).gitleaks).toBe(false);
+    expect(resolveHookConfig({ gitleaks: true }).gitleaks).toBe(true);
+    expect(resolveHookConfig({}).gitleaks).toBe(true);
   });
 });
 
