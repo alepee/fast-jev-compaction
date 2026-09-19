@@ -38,7 +38,7 @@ export const DEFAULT_SIDE_EFFECT_TOOLS: readonly string[] = [
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   // Asymmetric on purpose: truncating a result is recoverable by re-running
-  // the tool, removing the call is not. See README, "Thresholds".
+  // the tool, removing the call is not.
   keepResultThreshold: 0.4,
   keepCallThreshold: 0.15,
   sideEffectTools: DEFAULT_SIDE_EFFECT_TOOLS,
@@ -153,10 +153,10 @@ export function batchCalls(
 }
 
 /**
- * Two thresholds, not one, and the destructive step needs a far lower
- * probability than the recoverable one. A call is removed only when Jev is
- * confident it is dead weight *and* the tool left nothing behind that removing
- * it would erase.
+ * Decides what happens to one call: keep it, truncate its result, or remove it
+ * with its result. The destructive step needs a far lower probability than the
+ * recoverable one, and a call is removed only when Jev is confident it is dead
+ * weight *and* the tool left nothing behind that removing it would erase.
  */
 export function decideCall(
   call: Pick<ToolCall, 'id' | 'tool' | 'pinned'> & Partial<Pick<ToolCall, 'isError'>>,
