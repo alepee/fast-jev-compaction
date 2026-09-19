@@ -244,6 +244,41 @@ falls back to Claude Code's built-in summary on errors or insufficient
 reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the
 Claude Code 2.1.274 type reference.
 
+### When it runs
+
+Two separate mechanisms, and the plugin does not play the same part in them.
+
+**It replaces compactions decided elsewhere** (`session.compact`). Your
+`/compact`, and Claude Code's own auto-compaction when the context fills up,
+both go through the hook, which hands back the pruned history instead of a
+summary. It falls back to the built-in summary when Jev fails or the key is
+missing, when the local pre-flight says no run could reach `minReductionRatio`,
+and when a real run does not reach it either.
+
+**It asks for compactions of its own** (`turn.complete`), at the end of a turn,
+when all of these hold:
+
+| Condition | Default |
+| --- | --- |
+| context at or above `compactAtPercent` | 60% |
+| turns since the last compaction | 3 (`cooldownTurns`) |
+| compactions so far this session | under 8 (`maxAutoCompactions`) |
+| auto-compaction not disabled by the guards | |
+
+That 60% is more eager than the built-in auto-compaction, which waits for the
+context to fill. It is meant to be: compacting costs nothing here, since
+messages stay verbatim and only tool results go, so early and often beats late
+and brutal.
+
+The trigger is not fixed. A compaction that frees less than `minPercentDrop`
+(5) points raises it above the level it could not bring down: 82% to 80% moves
+the trigger from 60% to 85%, so the next attempt waits for real growth instead
+of firing on the next turn. If that pushes the trigger to 95%, auto-compaction
+turns itself off for the session and says so.
+
+The two mechanisms chain: `turn.complete` calls `$.session.compact()`, which
+fires the `session.compact` hook. A re-entrance flag keeps that from looping.
+
 ### Install in Claude Code
 
 Function hooks are an early-access Claude Code feature (2.1.274+), so the
