@@ -1,17 +1,12 @@
 /**
- * Secret detection through the gitleaks binary.
+ * Secret detection through the gitleaks binary: one static binary with
+ * hundreds of maintained rules, reading stdin and writing JSON.
  *
- * Presidio and other NER-based detectors were the other candidate; they cost a
- * Python runtime and a several-hundred-megabyte model load, which a compaction
- * on the hot path cannot pay. gitleaks is one static binary with hundreds of
- * maintained rules, reads stdin and writes JSON, so it runs in well under a
- * second on a whole transcript.
+ * It returns literal values rather than patterns, which is what keeps the rest
+ * of the pipeline synchronous: `redact.ts` takes them as `literals` and masks
+ * them like any other rule.
  *
- * It finds secrets, not people: emails, IBANs, cards and account names stay
- * with the built-in rules in `redact.ts`. What it returns here is a list of
- * literal values, which the redactor masks like any other rule.
- *
- * Nothing leaves the machine: the binary is local, and the secrets it reports
+ * Nothing leaves the machine. The binary is local, and the secrets it reports
  * are only ever used to remove themselves from the state.
  */
 import type { Message } from './types.js';
