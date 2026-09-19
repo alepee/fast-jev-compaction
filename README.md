@@ -172,6 +172,13 @@ Two layers, because they catch different things:
   one static binary, no model to load, and nothing leaves the machine. When it
   is not installed the run says so in the log and the patterns carry on alone.
 
+The two layers catch different things, which is the point. gitleaks found a
+`sk_live_` Stripe key the built-in patterns missed (they expect a hyphen);
+the patterns caught a `AIza` Google key gitleaks let through on the same run.
+Note that gitleaks scores entropy and exact lengths, so it stays quiet on
+made-up placeholders: testing it with `sk-test-1234` will look like a failure
+and is not one.
+
 An NER detector (Presidio and the like) would add what neither layer has,
 names and places, at the cost of a Python runtime and a several-hundred-
 megabyte model load on a path that has to stay fast. Deliberately left out for
