@@ -111,3 +111,36 @@ describe('stripGuardRail', () => {
     expect(stripGuardRail(conversation)).toEqual(conversation);
   });
 });
+
+describe('the log line', () => {
+  it('counts the compaction, not the notice it appended', async () => {
+    const { compactSession, resolveHookConfig } = await import('../hooks/keep-the-thread.ts');
+    const config = { ...resolveHookConfig({ preserveRecentMessages: 0 }), apiKey: 'k' };
+    const messages = [
+      { role: 'user' as const, text: 'go', toolUses: [] },
+      {
+        role: 'assistant' as const,
+        text: '',
+        toolUses: [{ tool_use_id: 'a', tool: 'Read', input: { file_path: 'x' } }],
+      },
+      {
+        role: 'user' as const,
+        text: '',
+        toolUses: [],
+        toolResults: [{ tool_use_id: 'a', text: 'y'.repeat(3000) }],
+      },
+      { role: 'user' as const, text: 'next', toolUses: [] },
+    ];
+    const fetchFn = async () => ({
+      status: 200,
+      ok: true,
+      text: JSON.stringify({ answers: { call_t1: { noul: 0.9 }, result_t1: { noul: 0.01 } } }),
+    });
+    const { result, messages: out } = await compactSession(messages, config, fetchFn);
+    expect(out).toHaveLength(messages.length + 1);
+    expect(isGuardRailMessage(out[out.length - 1]!)).toBe(true);
+    // What the log reports: the compaction's own figures, notice excluded.
+    expect(result.stats.messagesAfter).toBe(messages.length);
+    expect(result.stats.messagesBefore).toBe(messages.length);
+  });
+});
