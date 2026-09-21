@@ -1,6 +1,6 @@
 {
   "name": "fast-jev-compaction",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions, with PII masking and auto-compaction guards.",
   "license": "MIT",
   "userConfig": {
@@ -66,6 +66,18 @@
       "title": "Compaction percentage",
       "description": "Context percentage at which turn.complete requests compaction.",
       "default": 60
+    },
+    "advise": {
+      "type": "boolean",
+      "title": "Ask before auto-compacting",
+      "description": "Before an automatic compaction, ask Jev whether the session is at a boundary where compacting is safe, instead of going on the context percentage alone. A mid-task compaction is when losing tool results hurts most.",
+      "default": true
+    },
+    "alwaysCompactAtPercent": {
+      "type": "number",
+      "title": "Compact without asking above",
+      "description": "Context percent past which the compaction runs without asking. The window is about to fill anyway, and a session must not stop compacting because the adviser is unreachable.",
+      "default": 85
     },
     "minReductionRatio": {
       "type": "number",

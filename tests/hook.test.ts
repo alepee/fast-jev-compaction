@@ -63,6 +63,8 @@ describe('hook config', () => {
       cooldownTurns: 3,
       minPercentDrop: 5,
       maxAutoCompactions: 8,
+      advise: true,
+      alwaysCompactAtPercent: 85,
       model: 'jev-latest',
     });
     expect(
@@ -89,6 +91,8 @@ describe('hook config', () => {
       cooldownTurns: 3,
       minPercentDrop: 5,
       maxAutoCompactions: 8,
+      advise: true,
+      alwaysCompactAtPercent: 85,
       redact: 'strict',
       sideEffectTools: ['Bash', 'Deploy'],
       protectErrors: false,
@@ -191,14 +195,33 @@ describe('auto-compaction guards', () => {
 
   it('waits for the cooldown, the trigger, and the session cap', () => {
     const fresh = initialAutoCompactState(config);
-    expect(shouldAutoCompact(fresh, 59, config).compact).toBe(false);
-    expect(shouldAutoCompact(fresh, 61, config).compact).toBe(true);
+    expect(shouldAutoCompact(fresh, 59, config)).toEqual({ compact: false });
+    // Over the trigger but under the ceiling: the moment still has to be judged.
+    expect(shouldAutoCompact(fresh, 61, config)).toEqual({ compact: false, ask: true });
+    expect(shouldAutoCompact(fresh, 90, config)).toEqual({ compact: true });
     // Just compacted: three turns of quiet before asking again.
     expect(shouldAutoCompact({ ...fresh, turnsSinceCompaction: 1 }, 99, config).compact).toBe(false);
     expect(shouldAutoCompact({ ...fresh, turnsSinceCompaction: 3 }, 99, config).compact).toBe(true);
     const capped = { ...fresh, compactions: config.maxAutoCompactions };
     expect(shouldAutoCompact(capped, 99, config)).toMatchObject({ compact: false });
     expect(shouldAutoCompact(capped, 99, config).compact).toBe(false);
+  });
+
+  it('skips the judgment entirely when the adviser is off', () => {
+    const off = { ...config, advise: false };
+    expect(shouldAutoCompact(initialAutoCompactState(off), 61, off)).toEqual({ compact: true });
+  });
+
+  it('compacts without asking once the context is past the ceiling', () => {
+    // A bad moment costs less than running out of room, and an unreachable
+    // adviser must never stop a session from compacting.
+    expect(shouldAutoCompact(initialAutoCompactState(config), 85, config)).toEqual({
+      compact: true,
+    });
+    expect(shouldAutoCompact(initialAutoCompactState(config), 84, config)).toEqual({
+      compact: false,
+      ask: true,
+    });
   });
 
   it('leaves the trigger alone when a compaction actually frees context', () => {

@@ -130,6 +130,8 @@ put it in a source file.
 | `keepThreshold` | unset | Legacy single knob; sets both thresholds |
 | `sideEffectTools` | `DEFAULT_SIDE_EFFECT_TOOLS` | Tools whose calls are truncated, never removed |
 | `protectErrors` | `true` | Never remove a call whose result was an error |
+| `tailMessages` | `64` | Messages the adviser snapshot may carry |
+| `toolResultBytes` | `512` | Bytes kept from each tool result in that snapshot |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
@@ -146,6 +148,10 @@ reduction a compaction of this transcript could reach.
 `scanForSecrets(messages, run, options)` runs `gitleaks stdin` through an
 injected process runner and returns the values to mask; it never throws, so a
 missing binary degrades to the built-in patterns.
+
+`adviseCompaction(messages, usage, asker, options)` answers whether now is a
+good moment to compact, with `adviserSnapshot`, `adviceScore` and `floorFor`
+exposed separately. It never throws: without a judgment, the answer is no.
 
 ## What this fork changes
 
@@ -264,6 +270,7 @@ when all of these hold:
 | turns since the last compaction | 3 (`cooldownTurns`) |
 | compactions so far this session | under 8 (`maxAutoCompactions`) |
 | auto-compaction not disabled by the guards | |
+| Jev judges the session to be at a boundary | see below |
 
 That 60% is more eager than the built-in auto-compaction, which waits for the
 context to fill. It is meant to be: compacting costs nothing here, since
@@ -278,6 +285,41 @@ turns itself off for the session and says so.
 
 The two mechanisms chain: `turn.complete` calls `$.session.compact()`, which
 fires the `session.compact` hook. A re-entrance flag keeps that from looping.
+
+### Is this a good moment?
+
+A percentage knows how full the window is and nothing about what the session is
+doing. The moment it is most likely to fire mid-task is exactly the moment
+losing tool results hurts most: the assistant is still using them. So once the
+guards above pass, the plugin asks Jev two questions in one request and
+composes the answer in code:
+
+- **done**: is the assistant's latest unit of work finished? Waiting on a
+  person counts as finished.
+- **shape**: did the assistant do the work itself, or coordinate others?
+
+`score = finished × (0.5 + 0.5 × hands_on)`. A finished hands-on unit lands
+near 1, a finished coordinating one near 0.5, unfinished work near 0.
+
+The score is compared against a **floor that slides with how full the context
+is**: 0.90 while the window is under 10%, falling to 0.50 at 90%. A wrong call
+costs most when there is still room and least when compaction is imminent, so
+the bar drops as the room runs out.
+
+Two limits keep this from ever making things worse:
+
+- past `alwaysCompactAtPercent` (85%) the compaction runs **without asking**,
+  so an unreachable adviser can never stop a session from compacting;
+- without a usable judgment the answer is **no**, so a compaction never follows
+  a bad answer. `advise: false` removes the question entirely.
+
+The snapshot sent is a bounded tail of the conversation, not the whole
+transcript, and it goes through the same masking as the compaction state.
+
+This part is adapted from [compact-adviser](https://github.com/kunchenguid/compact-adviser)
+(MIT): the two questions, the composed score and the sliding floor are theirs.
+Their constants are calibrated against their own eval set, so treat them here
+as a starting point rather than a measured optimum.
 
 ### Install in Claude Code
 

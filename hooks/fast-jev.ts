@@ -9,6 +9,7 @@ import type {
 } from 'claude-code';
 
 import { compact, droppableRatio, reductionRatio, resolveOptions } from '../src/compact.js';
+import { adviseCompaction, type Advice, type AdviserOptions } from '../src/adviser.js';
 import { scanForSecrets, type GitleaksOptions, type ProcessRunner } from '../src/gitleaks.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
 import type {
@@ -34,6 +35,13 @@ const HOOK_DEFAULTS = {
   minPercentDrop: 5,
   /** Hard stop on auto-compactions in one session. */
   maxAutoCompactions: 8,
+  /**
+   * Context percent above which the context is compacted without asking Jev
+   * whether the moment is right. Past this the window is about to fill
+   * anyway, so a bad moment costs less than running out of room, and a session
+   * never stops compacting because the adviser is unreachable.
+   */
+  alwaysCompactAtPercent: 85,
   model: DEFAULT_MODEL,
 };
 
@@ -66,6 +74,9 @@ export type HookConfig = CompactOptions & {
   cooldownTurns: number;
   minPercentDrop: number;
   maxAutoCompactions: number;
+  /** Ask Jev whether the session is at a boundary before auto-compacting. */
+  advise: boolean;
+  alwaysCompactAtPercent: number;
   model: string;
 };
 
@@ -115,6 +126,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
       optionNumber(options, 'maxAutoCompactions', HOOK_DEFAULTS.maxAutoCompactions),
     ),
     gitleaks: options['gitleaks'] !== false,
+    advise: options['advise'] !== false,
+    alwaysCompactAtPercent: optionNumber(
+      options,
+      'alwaysCompactAtPercent',
+      HOOK_DEFAULTS.alwaysCompactAtPercent,
+    ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
   const gitleaksBinary = optionString(options, 'gitleaksBinary');
@@ -386,9 +403,15 @@ export function initialAutoCompactState(config: HookConfig): AutoCompactState {
   return { turnsSinceCompaction: Number.POSITIVE_INFINITY, compactions: 0, trigger: config.compactAtPercent };
 }
 
+/**
+ * `ask` means the cheap guards passed and the decision now needs a judgment:
+ * the caller asks Jev whether the session is at a boundary. Keeping it out of
+ * this function is what keeps the guards pure and testable.
+ */
 export type AutoCompactVerdict =
-  | { compact: true }
-  | { compact: false; reason?: string };
+  | { compact: true; ask?: false }
+  | { compact: false; ask: true }
+  | { compact: false; ask?: false; reason?: string };
 
 /** Decides whether this turn should ask for a compaction. Pure, so it is testable. */
 export function shouldAutoCompact(
@@ -405,7 +428,26 @@ export function shouldAutoCompact(
   }
   if (state.turnsSinceCompaction < config.cooldownTurns) return { compact: false };
   if (percent < state.trigger) return { compact: false };
+  // Past the ceiling the window is about to fill anyway: compact without
+  // spending a request on whether the moment is ideal.
+  if (percent >= config.alwaysCompactAtPercent) return { compact: true };
+  if (config.advise) return { compact: false, ask: true };
   return { compact: true };
+}
+
+/** The adviser settings a hook config implies; the snapshot reuses the compaction's masking. */
+export function adviserOptions(config: HookConfig): AdviserOptions {
+  return config.redact ? { redact: config.redact } : {};
+}
+
+/** `72% ≥ 0.66 floor (finished 0.91, hands-on 0.78)`, for the log. */
+export function adviceLine(advice: Advice): string {
+  if (advice.error) return `compaction postponed (no judgment: ${advice.error})`;
+  return `${advice.compact ? 'boundary reached' : 'mid-task, postponed'}: score ${advice.score.toFixed(
+    2,
+  )} vs floor ${advice.floor.toFixed(2)} (finished ${advice.finished.toFixed(
+    2,
+  )}, hands-on ${advice.handsOn.toFixed(2)})`;
 }
 
 /**
@@ -497,8 +539,28 @@ export const register: Register = (on: On, options: PluginOptions) => {
       const before = (await $.session.usage()).context.percent ?? 0;
       const verdict = shouldAutoCompact(auto, before, configured);
       if (!verdict.compact) {
-        if (verdict.reason) $.ui.log(verdict.reason);
-        return next(event);
+        if (verdict.ask) {
+          // The guards passed; only the moment is still in question.
+          const config = { ...configured, apiKey: await getApiKey($, configured) };
+          const advice = await adviseCompaction(
+            await $.session.messages(),
+            before / 100,
+            jevAsker(
+              async (url, init) => {
+                const response = await $.http.fetch(url, init);
+                return { status: response.status, ok: response.ok, text: response.text };
+              },
+              config.apiKey ?? '',
+              config.model,
+            ),
+            adviserOptions(config),
+          );
+          $.ui.log(adviceLine(advice));
+          if (!advice.compact) return next(event);
+        } else {
+          if (verdict.reason) $.ui.log(verdict.reason);
+          return next(event);
+        }
       }
       compacting = true;
       await $.session.compact();
