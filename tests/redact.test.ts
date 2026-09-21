@@ -103,7 +103,7 @@ describe('redaction in the Jev state', () => {
     // What comes back out is still the untouched original.
     const result = await compact(
       messages,
-      { ask: async () => ({ answers: { call_t1: { noul: 0.9 }, result_t1: { noul: 0.9 } } }) },
+      { judge: async () => ({ answers: { call_t1: { noul: 0.9 }, result_t1: { noul: 0.9 } } }) },
       { preserveRecentMessages: 0 },
     );
     expect(result.messages[0]?.text).toBe('deploy for antoine@evaneos.com');

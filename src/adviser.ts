@@ -18,7 +18,7 @@
 
 import { createRedactor, type Redactor } from './redact.js';
 import type { RedactionLevel } from './redact.js';
-import type { JevAsker, JevQuestions, Message } from './types.js';
+import type { Judge, JevQuestions, Message } from './types.js';
 
 /**
  * Two questions, neither asking Jev to reason two steps at once.
@@ -241,12 +241,12 @@ export function adviserSnapshot(
 export async function adviseCompaction(
   messages: readonly Message[],
   usage: number,
-  asker: JevAsker,
+  judge: Judge,
   options: AdviserOptions = {},
 ): Promise<Advice> {
   const floor = floorFor(usage, options);
   try {
-    const response = await asker.ask(adviserSnapshot(messages, options), ADVISER_QUESTIONS);
+    const response = await judge.judge(adviserSnapshot(messages, options), ADVISER_QUESTIONS);
     const answers = response.answers as Record<string, unknown>;
     const finished = choiceProbability(answers, 'done', 'finished');
     const handsOn = choiceProbability(answers, 'shape', 'hands_on');

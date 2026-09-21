@@ -6,7 +6,7 @@ import {
   adviserSnapshot,
   choiceProbability,
   floorFor,
-  type JevAsker,
+  type Judge,
   type Message,
 } from '../src/index.js';
 import { adviceLine } from '../hooks/fast-jev.ts';
@@ -139,24 +139,24 @@ describe('the snapshot', () => {
 
 describe('adviseCompaction', () => {
   it('compacts a finished hands-on unit and holds off mid-task', async () => {
-    const asker = (f: number, h: number): JevAsker => ({ ask: async () => answers(f, h) });
-    const finished = await adviseCompaction(transcript, 0.5, asker(0.95, 0.9));
+    const judge = (f: number, h: number): Judge => ({ judge: async () => answers(f, h) });
+    const finished = await adviseCompaction(transcript, 0.5, judge(0.95, 0.9));
     expect(finished).toMatchObject({ compact: true, floor: 0.7 });
-    const midTask = await adviseCompaction(transcript, 0.5, asker(0.2, 0.9));
+    const midTask = await adviseCompaction(transcript, 0.5, judge(0.2, 0.9));
     expect(midTask.compact).toBe(false);
   });
 
   it('lets the same judgment through once the window is fuller', async () => {
-    const asker: JevAsker = { ask: async () => answers(0.8, 0.5) };
+    const judge: Judge = { judge: async () => answers(0.8, 0.5) };
     // 0.6 score: under the 0.7 floor at half full, over the 0.5 floor at 90%.
-    expect((await adviseCompaction(transcript, 0.5, asker)).compact).toBe(false);
-    expect((await adviseCompaction(transcript, 0.9, asker)).compact).toBe(true);
+    expect((await adviseCompaction(transcript, 0.5, judge)).compact).toBe(false);
+    expect((await adviseCompaction(transcript, 0.9, judge)).compact).toBe(true);
   });
 
   it('sends the two questions and a snapshot, not the whole transcript', async () => {
-    const ask = vi.fn(async () => answers(0.9, 0.9));
-    await adviseCompaction(transcript, 0.5, { ask });
-    const [state, questions] = ask.mock.calls[0]!;
+    const judge = vi.fn(async () => answers(0.9, 0.9));
+    await adviseCompaction(transcript, 0.5, { judge });
+    const [state, questions] = judge.mock.calls[0]!;
     expect(Object.keys(questions)).toEqual(['done', 'shape']);
     expect(questions).toEqual(ADVISER_QUESTIONS);
     expect(state).toHaveProperty('recent');
@@ -164,7 +164,7 @@ describe('adviseCompaction', () => {
 
   it('never compacts on a judgment it could not get', async () => {
     const advice = await adviseCompaction(transcript, 0.95, {
-      ask: async () => {
+      judge: async () => {
         throw new Error('Jev request failed (401)');
       },
     });
@@ -174,7 +174,7 @@ describe('adviseCompaction', () => {
 
   it('refuses a malformed distribution rather than scoring it', async () => {
     const advice = await adviseCompaction(transcript, 0.5, {
-      ask: async () => ({ answers: { done: { probabilities: { finished: 0.2 } }, shape: choice({ hands_on: 1, coordinating: 0, unclear: 0 }) } }) as never,
+      judge: async () => ({ answers: { done: { probabilities: { finished: 0.2 } }, shape: choice({ hands_on: 1, coordinating: 0, unclear: 0 }) } }) as never,
     });
     expect(advice.compact).toBe(false);
     expect(advice.error).toContain('sum to 1');
@@ -190,13 +190,13 @@ describe('adviseCompaction', () => {
 
 describe('the log line', () => {
   it('says what was decided and on what numbers', async () => {
-    const yes = await adviseCompaction(transcript, 0.5, { ask: async () => answers(0.95, 0.9) });
+    const yes = await adviseCompaction(transcript, 0.5, { judge: async () => answers(0.95, 0.9) });
     expect(adviceLine(yes)).toContain('boundary reached');
     expect(adviceLine(yes)).toMatch(/score 0\.9\d vs floor 0\.70/);
-    const no = await adviseCompaction(transcript, 0.5, { ask: async () => answers(0.1, 0.1) });
+    const no = await adviseCompaction(transcript, 0.5, { judge: async () => answers(0.1, 0.1) });
     expect(adviceLine(no)).toContain('mid-task, postponed');
     const failed = await adviseCompaction(transcript, 0.5, {
-      ask: async () => {
+      judge: async () => {
         throw new Error('offline');
       },
     });

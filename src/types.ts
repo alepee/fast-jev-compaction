@@ -253,7 +253,15 @@ export interface JevResponse {
   [key: string]: unknown;
 }
 
-/** Anything that can answer Jev questions: `JevClient`, or a host-provided adapter. */
-export interface JevAsker {
-  ask(state: JevState, questions: JevQuestions): Promise<JevResponse>;
+/**
+ * Anything that answers typed questions about a state: given a state and a
+ * set of questions, it returns graded answers with their probabilities.
+ *
+ * This is the port, so it names no vendor; the adapter does. `JevClient`
+ * speaks to TypeSafe over HTTP, the hook wraps the engine's own fetch, and a
+ * local runtime for an open-weight decision model would be a third. The
+ * question shapes (`noul`, `choice`, `score`) are the same across them.
+ */
+export interface Judge {
+  judge(state: JevState, questions: JevQuestions): Promise<JevResponse>;
 }

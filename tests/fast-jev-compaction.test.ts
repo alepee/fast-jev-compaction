@@ -14,7 +14,7 @@ import {
   reductionRatio,
   resolveOptions,
   type HistoryToolCall,
-  type JevAsker,
+  type Judge,
   type JevQuestions,
   type Message,
   type ToolCall,
@@ -52,9 +52,9 @@ function transcript(): Message[] {
 
 type Seen = { state: unknown; questions: string[] };
 
-function fakeJev(answer: (name: string) => number, seen: Seen[] = []): JevAsker {
+function fakeJev(answer: (name: string) => number, seen: Seen[] = []): Judge {
   return {
-    async ask(state, questions: JevQuestions) {
+    async judge(state, questions: JevQuestions) {
       seen.push({ state, questions: Object.keys(questions) });
       return {
         answers: Object.fromEntries(
@@ -395,8 +395,8 @@ describe('compact', () => {
   });
 
   it('rejects malformed answers', async () => {
-    const broken: JevAsker = {
-      ask: async () => ({ answers: { call_t1: { noul: 0.5 } } }),
+    const broken: Judge = {
+      judge: async () => ({ answers: { call_t1: { noul: 0.5 } } }),
     };
     await expect(compact(transcript(), broken, { preserveRecentMessages: 1 })).rejects.toThrow(
       /Invalid Jev answer/,
@@ -435,12 +435,12 @@ describe('HTTP client', () => {
         return new Response(JSON.stringify({ answers: { q: { noul: 0.4 } } }), { status: 200 });
       }) as typeof fetch,
     });
-    const response = await client.ask('state', { q: { type: 'noul', instructions: 'x' } });
+    const response = await client.judge('state', { q: { type: 'noul', instructions: 'x' } });
     expect(response.answers.q).toEqual({ noul: 0.4 });
     expect(JSON.parse(bodies[0]!).model).toBe('jev-test');
 
     const keyless = new JevClient({ apiKey: '' });
-    await expect(keyless.ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
+    await expect(keyless.judge('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
