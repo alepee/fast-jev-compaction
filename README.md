@@ -2,8 +2,9 @@
 
 Compaction that keeps the thread. A summary makes an assistant forget the exact
 error, the exact path, the exact constraint it had just learned. This plugin
-never writes one: it scores every tool call and result in one fast request,
-drops or truncates the stale ones, and leaves everything it keeps **verbatim**.
+never writes one: it scores every tool call and result in a handful of fast,
+concurrent requests, truncates the stale ones, and leaves everything it keeps
+**verbatim**.
 
 It also decides *when* to compact, by asking whether the session is at a
 boundary rather than watching a percentage, and it masks personal data and
@@ -160,8 +161,10 @@ per-reason decision counts (including `protected`), the distinct values masked
 per rule in `redactions`, the state size in estimated tokens, which fitting
 stage was needed, and the number of requests.
 
-`droppableRatio(messages, options)` answers, without any request, the best
-reduction a compaction of this transcript could reach.
+`droppableRatio(messages, options)` answers, without any request, a lower
+bound on the reduction a compaction of this transcript could reach. It counts
+only what truncating every result would save, so a run that also drops calls
+beats it.
 
 `scanForSecrets(messages, run, options)` runs `gitleaks stdin` through an
 injected process runner and returns the values to mask; it never throws, so a
@@ -239,8 +242,9 @@ asked again, and every attempt costs a full round of Jev requests.
 
 Four guards, all in the hook:
 
-- a **pre-flight**: `droppableRatio()` computes locally the best reduction this
-  transcript could reach; under `minReductionRatio`, the hook falls back to the
+- a **pre-flight**: `droppableRatio()` computes locally a lower bound on the
+  reduction this transcript could reach; under `minReductionRatio`, the hook
+  falls back to the
   built-in summary without calling Jev at all;
 - a **cooldown** of `cooldownTurns` turns after each compaction;
 - an **escalating trigger**: a compaction that frees less than `minPercentDrop`
@@ -298,9 +302,6 @@ to drop the line.
   permanent. New tool calls refill the budget, so exhaustion bites on sessions
   dominated by message text; `minReductionRatio` and `truncateHeadChars` move
   where it bites.
-- Jev is asked whether a tool result is worth keeping without being shown that
-  result: the state carries the tool, its input, whether it succeeded and its
-  size in characters, never its content.
 - Masking is pattern-based. It catches shapes, not meaning: a person's name, a
   free-text address or an unusual secret format goes through. What was looked
   at to close that gap, and why nothing was picked, is in
@@ -341,14 +342,15 @@ when all of these hold:
 | auto-compaction not disabled by the guards | |
 | Jev judges the session to be at a boundary | see below |
 
-That 60% is more eager than the built-in auto-compaction, which waits for the
-context to fill. It is meant to be: compacting costs nothing here, since
-messages stay verbatim and only tool results go, so early and often beats late
-and brutal.
+Compacting is **not** free here, whatever the verbatim output suggests. It
+rewrites the cached prefix, and the measurement above puts that at tens of
+turns before the smaller prompt repays it. The trigger sits at 75% for that
+reason: the reason to compact is room, not economy, and early and often is the
+wrong instinct.
 
 The trigger is not fixed. A compaction that frees less than `minPercentDrop`
 (5) points raises it above the level it could not bring down: 82% to 80% moves
-the trigger from 60% to 85%, so the next attempt waits for real growth instead
+the trigger from 75% to 85%, so the next attempt waits for real growth instead
 of firing on the next turn. If that pushes the trigger to 95%, auto-compaction
 turns itself off for the session and says so.
 
