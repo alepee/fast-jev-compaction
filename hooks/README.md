@@ -58,6 +58,8 @@ The plugin declares these `userConfig` values in
 | `sideEffectTools` | built-in list |
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
+| `advise` | `true` |
+| `alwaysCompactAtPercent` | `85` |
 | `minReductionRatio` | `0.25` |
 | `cooldownTurns` | `3` |
 | `minPercentDrop` | `5` |
@@ -73,6 +75,9 @@ machine; the messages the hook hands back are always the verbatim originals.
 secret it reports is masked as a literal value. It runs whenever the binary is
 there; a missing one is logged once and the session stops trying, leaving the
 built-in patterns to carry on alone.
+`advise` adds a semantic gate before an automatic compaction: Jev judges
+whether the session is at a boundary, against a floor that slides with context
+usage. Past `alwaysCompactAtPercent` the compaction runs without asking.
 `cooldownTurns`, `minPercentDrop` and `maxAutoCompactions` are the guards that
 keep `turn.complete` from asking for a compaction every turn: see the README,
 [What this fork changes](../README.md#what-this-fork-changes).
