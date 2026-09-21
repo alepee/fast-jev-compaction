@@ -1,6 +1,6 @@
 {
   "name": "keep-the-thread",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "Compaction that keeps the thread: the transcript stays verbatim, stale tool results go, the moment is judged, and nothing leaves the machine unmasked.",
   "license": "MIT",
   "userConfig": {
@@ -64,8 +64,8 @@
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Context percentage at which turn.complete requests compaction.",
-      "default": 60
+      "description": "Context percent below which no compaction is suggested or run. Compacting rarely pays for itself: rewriting the cached prefix takes many turns of the smaller prompt to earn back, and that ratio does not improve by waiting. What waiting buys is the chance of never paying at all, on a session that ends before the window is under pressure.",
+      "default": 75
     },
     "advise": {
       "type": "boolean",

@@ -11,7 +11,21 @@
  * a compaction with the turns before it, and attributes the excess to the
  * compaction. Baselines are medians rather than means, so a single heavy turn
  * does not hide the rewrite behind it.
+ *
+ * The excess alone is not actionable, because the two sides of the trade are
+ * not the same kind of thing: the rewrite is paid once, the smaller prompt is
+ * saved on every later turn. So the meter converts them into the one number
+ * that compares them, the turns it takes for the saving to repay the rewrite.
  */
+
+/**
+ * What a cache write and a cache read cost relative to a base input token.
+ * Only their ratio matters here, and it is what makes the break-even long:
+ * writing is dearer than base input, reading is far cheaper, so a rewrite
+ * takes many turns of a smaller prompt to earn back.
+ */
+export const CACHE_WRITE_RATE = 1.25;
+export const CACHE_READ_RATE = 0.1;
 
 /** One turn's usage, as `turn.complete` reports it, plus what it cost. */
 export interface TurnSample {
@@ -36,6 +50,19 @@ export interface CacheVerdict {
   excessUsd?: number;
   /** Context points the compaction won back, when the caller knows them. */
   pointsFreed?: number;
+  /**
+   * Prompt tokens a normal turn carried before the compaction, and after it.
+   * Read plus written: what the request actually costs, whatever the mix.
+   */
+  baselinePrompt: number;
+  prompt: number;
+  /** Prompt tokens no longer sent on every later turn. Negative when it grew. */
+  freedTokens: number;
+  /**
+   * Turns of the smaller prompt needed to repay the rewrite. Absent when the
+   * compaction freed nothing, in which case it never repays.
+   */
+  breakEvenTurns?: number;
 }
 
 export interface CacheTotals {
@@ -48,6 +75,10 @@ export interface CacheTotals {
 export interface CacheMeterOptions {
   /** Turns the baseline is taken over. Default 5. */
   baselineTurns?: number;
+  /** Overrides the assumed cache write rate, for a host that prices differently. */
+  writeRate?: number;
+  /** Overrides the assumed cache read rate. */
+  readRate?: number;
 }
 
 export interface CacheMeter {
@@ -70,6 +101,26 @@ export function median(values: readonly number[]): number {
     : ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2;
 }
 
+/** What one turn actually sends: the cached part it reads plus the part it writes. */
+export function promptTokens(sample: Pick<TurnSample, 'cacheRead' | 'cacheWrite'>): number {
+  return sample.cacheRead + sample.cacheWrite;
+}
+
+/**
+ * Turns of a prompt shorter by `freedTokens` needed to repay rewriting
+ * `excessCacheWrite`. Undefined when the compaction freed nothing, because
+ * then there is nothing to repay it with.
+ */
+export function breakEvenTurns(
+  excessCacheWrite: number,
+  freedTokens: number,
+  writeRate = CACHE_WRITE_RATE,
+  readRate = CACHE_READ_RATE,
+): number | undefined {
+  if (freedTokens <= 0 || excessCacheWrite <= 0 || readRate <= 0) return undefined;
+  return Math.ceil((excessCacheWrite * writeRate) / (freedTokens * readRate));
+}
+
 function definedUsd(samples: readonly TurnSample[]): number[] {
   return samples
     .map((sample) => sample.usd)
@@ -78,6 +129,8 @@ function definedUsd(samples: readonly TurnSample[]): number[] {
 
 export function createCacheMeter(options: CacheMeterOptions = {}): CacheMeter {
   const window = Math.max(1, Math.floor(options.baselineTurns ?? 5));
+  const writeRate = options.writeRate ?? CACHE_WRITE_RATE;
+  const readRate = options.readRate ?? CACHE_READ_RATE;
   const recent: TurnSample[] = [];
   const totals: CacheTotals = { compactions: 0, excessCacheWrite: 0, pointsFreed: 0 };
   let pending: { pointsFreed?: number } | undefined;
@@ -96,13 +149,24 @@ export function createCacheMeter(options: CacheMeterOptions = {}): CacheMeter {
       const { pointsFreed } = pending;
       pending = undefined;
       const baselineCacheWrite = median(recent.map((s) => s.cacheWrite));
+      const baselinePrompt = median(recent.map(promptTokens));
+      const prompt = promptTokens(sample);
       const usdSamples = definedUsd(recent);
+      const excessCacheWrite = Math.max(0, sample.cacheWrite - baselineCacheWrite);
+      // Measured, not reported: the prompt shrank by whatever the request
+      // stopped carrying, which no caller has to tell us.
+      const freedTokens = baselinePrompt - prompt;
       const verdict: CacheVerdict = {
         baselineTurns: recent.length,
         baselineCacheWrite,
         cacheWrite: sample.cacheWrite,
-        excessCacheWrite: Math.max(0, sample.cacheWrite - baselineCacheWrite),
+        excessCacheWrite,
+        baselinePrompt,
+        prompt,
+        freedTokens,
       };
+      const turns = breakEvenTurns(excessCacheWrite, freedTokens, writeRate, readRate);
+      if (turns !== undefined) verdict.breakEvenTurns = turns;
       if (pointsFreed !== undefined) verdict.pointsFreed = pointsFreed;
       if (typeof sample.usd === 'number' && usdSamples.length > 0) {
         const baselineUsd = median(usdSamples);
@@ -131,26 +195,32 @@ function dollars(usd: number): string {
 }
 
 /**
- * `cache rewritten 58k tokens above the 4k baseline (+$0.41) for 21 context
- * points freed`, or a line saying the baseline was missing.
+ * `cache rewritten 214k tokens above the 16k baseline, 39k less to send each
+ * turn: ~69 turns to break even`, or a line saying why it never will.
+ *
+ * The break-even is the point of the line. The excess on its own reads as a
+ * cost with nothing to weigh it against, and the context freed reads as a win
+ * with nothing to weigh it against either.
  */
 export function cacheLine(verdict: CacheVerdict, totals?: CacheTotals): string {
   if (verdict.baselineTurns === 0) {
     return `cache write ${thousands(verdict.cacheWrite)} tokens after compaction (no baseline yet)`;
   }
-  const parts = [
-    `cache rewritten ${thousands(verdict.excessCacheWrite)} tokens above the ${thousands(
-      verdict.baselineCacheWrite,
-    )} baseline`,
-  ];
-  if (verdict.excessUsd !== undefined) parts.push(`+${dollars(verdict.excessUsd)}`);
-  if (verdict.pointsFreed !== undefined) parts.push(`for ${verdict.pointsFreed} context points freed`);
-  const line = `${parts[0]}${verdict.excessUsd !== undefined ? ` (${parts[1]})` : ''}${
-    verdict.pointsFreed !== undefined ? ` ${parts[parts.length - 1]}` : ''
-  }`;
+  let line = `cache rewritten ${thousands(verdict.excessCacheWrite)} tokens above the ${thousands(
+    verdict.baselineCacheWrite,
+  )} baseline`;
+  if (verdict.excessUsd !== undefined) line += ` (+${dollars(verdict.excessUsd)})`;
+  if (verdict.freedTokens > 0) {
+    line += `, ${thousands(verdict.freedTokens)} less to send each turn`;
+  }
+  if (verdict.pointsFreed !== undefined) line += ` (${verdict.pointsFreed} context points)`;
+  line +=
+    verdict.breakEvenTurns !== undefined
+      ? `: ~${verdict.breakEvenTurns} turns to break even`
+      : ': it never breaks even, the prompt did not get smaller';
   if (!totals || totals.compactions <= 1) return line;
   const running = `session total ${thousands(totals.excessCacheWrite)} tokens${
     totals.excessUsd !== undefined ? ` (${dollars(totals.excessUsd)})` : ''
-  } over ${totals.compactions} compactions for ${totals.pointsFreed} points`;
+  } rewritten over ${totals.compactions} compactions`;
   return `${line}; ${running}`;
 }
