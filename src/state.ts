@@ -1,4 +1,5 @@
 import { clipMiddle, noRedaction, REDACTION_MARGIN, type Redactor } from './redact.js';
+import { linkCalls } from './thread.js';
 import type {
   CompactionState,
   FittedState,
@@ -102,7 +103,7 @@ export function collectToolCalls(
       calls.push(call);
     }
   });
-  return calls;
+  return linkCalls(calls);
 }
 
 function inputText(

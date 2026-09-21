@@ -51,6 +51,10 @@ export interface ToolCall {
    */
   resultExcerpt?: string;
   isError: boolean;
+  /** The call before this one that failed on the same target, when there is one. */
+  retryOf?: string;
+  /** The freshest later call on the same target, which may make this output stale. */
+  supersededBy?: string;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;
 }
