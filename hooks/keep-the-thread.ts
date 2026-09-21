@@ -634,7 +634,10 @@ export const register: Register = (on: On, options: PluginOptions) => {
       }
       notify(
         $,
-        `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
+        // The compaction's own figures: `messages` also carries the notice the
+        // guard rail appends, and counting it here read as though compacting
+        // had created a message.
+        `kept ${result.stats.messagesAfter}/${result.stats.messagesBefore} messages, no summary (${summarize(result)})`,
       );
       return { messages };
     } catch (error) {
