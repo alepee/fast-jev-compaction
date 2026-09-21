@@ -8,7 +8,7 @@ import {
   type Message,
   type ProcessRunner,
 } from '../src/index.js';
-import { withScannedSecrets } from '../hooks/fast-jev.ts';
+import { withScannedSecrets } from '../hooks/keep-the-thread.ts';
 
 const transcript: Message[] = [
   { role: 'user', text: 'use the staging key', toolUses: [] },
