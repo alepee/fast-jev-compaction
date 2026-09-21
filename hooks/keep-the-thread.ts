@@ -16,6 +16,7 @@ import {
   type TurnSample,
 } from '../src/cachemeter.js';
 import { compact, droppableRatio, reductionRatio, resolveOptions } from '../src/compact.js';
+import { stripGuardRail, withGuardRail } from '../src/guardrail.js';
 import { adviseCompaction, type Advice, type AdviserOptions } from '../src/adviser.js';
 import { scanForSecrets, type GitleaksOptions, type ProcessRunner } from '../src/gitleaks.js';
 import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request.js';
@@ -84,6 +85,12 @@ export type HookConfig = CompactOptions & {
   /** Ask Jev whether the session is at a boundary before auto-compacting. */
   advise: boolean;
   /**
+   * Leave a note after a compaction saying what was removed and that a missing
+   * tool output proves nothing. A pruned history looks like a complete one,
+   * and an assistant reading its own unbacked turns learns from them.
+   */
+  guardRail: boolean;
+  /**
    * Report what each compaction costs in rewritten prompt cache. Free: the
    * figures come from the turn usage and the cost ledger the engine already
    * holds, and nothing is sent anywhere.
@@ -141,6 +148,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     gitleaks: options['gitleaks'] !== false,
     advise: options['advise'] !== false,
+    guardRail: options['guardRail'] !== false,
     measureCache: options['measureCache'] !== false,
     alwaysCompactAtPercent: optionNumber(
       options,
@@ -302,8 +310,12 @@ export async function compactSession(
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
   if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
-  return { result, messages: toSessionMessages(messages, result.messages) };
+  // The previous compaction's note is dropped before Jev ever sees it: it is
+  // rewritten from this run's figures, and stale counts are worse than none.
+  const input = config.guardRail ? stripGuardRail(messages) : [...messages];
+  const result = await compact(input, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const output = config.guardRail ? withGuardRail(result.messages, result.stats) : result.messages;
+  return { result, messages: toSessionMessages(input, output) };
 }
 
 function percent(ratio: number): string {

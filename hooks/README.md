@@ -59,6 +59,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `advise` | `true` |
+| `guardRail` | `true` |
 | `measureCache` | `true` |
 | `alwaysCompactAtPercent` | `85` |
 | `minReductionRatio` | `0.25` |
@@ -84,6 +85,11 @@ usage. Past `alwaysCompactAtPercent` the compaction runs without asking.
 that asks whether to keep it; without it Jev judges a result on its tool, its
 input, its success and its size alone. gitleaks scans that window with the
 rest, since it is text that leaves the machine.
+`guardRail` appends one note after a compaction that removed something,
+saying what went and that a missing tool output proves nothing. A summary
+announces itself; a pruned history does not, and an assistant that reads its
+own unbacked turns can take them as a precedent. The note replaces the
+previous one rather than stacking, and is stripped before Jev sees it.
 `measureCache` logs what each compaction cost in rewritten prompt cache next
 to the context it freed, since the context meter only ever shows the gain. It
 reads the turn usage and the cost ledger the engine already holds, so it sends

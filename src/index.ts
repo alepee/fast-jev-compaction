@@ -5,6 +5,7 @@ export * from './adviser.js';
 export * from './cachemeter.js';
 export * from './request.js';
 export * from './client.js';
+export * from './guardrail.js';
 export * from './thread.js';
 export * from './state.js';
 export * from './compact.js';

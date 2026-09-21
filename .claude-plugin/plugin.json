@@ -73,6 +73,12 @@
       "description": "Before an automatic compaction, ask Jev whether the session is at a boundary where compacting is safe, instead of going on the context percentage alone. A mid-task compaction is when losing tool results hurts most.",
       "default": true
     },
+    "guardRail": {
+      "type": "boolean",
+      "title": "Leave a note after compacting",
+      "description": "Append a short note saying what the compaction removed and that a missing tool output is not evidence the work was done. A pruned history looks like a complete one, and an assistant reading its own unbacked turns can learn from them that work may be declared finished without showing it.",
+      "default": true
+    },
     "measureCache": {
       "type": "boolean",
       "title": "Measure the cache cost",

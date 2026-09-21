@@ -76,6 +76,13 @@ built-in compaction summary with the original messages.
 7. The message list is rebuilt: a message that loses all its content is
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
+8. A short note is appended saying what was removed and that a missing tool
+   output is not evidence the work behind it was done. A summary announces
+   itself; a pruned history looks like a complete one, and an assistant
+   reading its own turns that claim something without showing it can take them
+   as a precedent. The note replaces the previous one instead of stacking, and
+   is stripped before the next compaction sees it. `guardRail: false` removes
+   it.
 
 Jev failures, malformed answers, a missing key, or a history that cannot be
 fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
