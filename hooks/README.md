@@ -2,7 +2,7 @@
 
 This plugin uses Claude Code function hooks to replace a compaction with the
 original messages, minus the tool calls and tool results Jev judged no longer
-needed. `hooks/fast-jev.ts` is a thin adapter: it reads the plugin options,
+needed. `hooks/keep-the-thread.ts` is a thin adapter: it reads the plugin options,
 finds the TypeSafe key, hands `session.compact` transcripts to the
 `keep-the-thread` library in `src/` (the plugin folder is the repository
 root, so the hook imports it directly) and maps the result back onto session
@@ -59,6 +59,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `advise` | `true` |
+| `measureCache` | `true` |
 | `alwaysCompactAtPercent` | `85` |
 | `minReductionRatio` | `0.25` |
 | `cooldownTurns` | `3` |
@@ -78,9 +79,13 @@ built-in patterns to carry on alone.
 `advise` adds a semantic gate before an automatic compaction: Jev judges
 whether the session is at a boundary, against a floor that slides with context
 usage. Past `alwaysCompactAtPercent` the compaction runs without asking.
+`measureCache` logs what each compaction cost in rewritten prompt cache next
+to the context it freed, since the context meter only ever shows the gain. It
+reads the turn usage and the cost ledger the engine already holds, so it sends
+nothing and adds no request.
 `cooldownTurns`, `minPercentDrop` and `maxAutoCompactions` are the guards that
 keep `turn.complete` from asking for a compaction every turn: see the README,
-[What this fork changes](../README.md#what-this-fork-changes).
+[Three decisions worth knowing](../README.md#three-decisions-worth-knowing).
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './redact.js';
 export * from './gitleaks.js';
 export * from './adviser.js';
+export * from './cachemeter.js';
 export * from './request.js';
 export * from './client.js';
 export * from './state.js';

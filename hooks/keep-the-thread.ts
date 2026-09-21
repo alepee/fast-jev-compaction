@@ -6,8 +6,15 @@ import type {
   ToolResultSummary,
   ToolUseSummary,
   TurnCompleteInput,
+  TurnUsage,
 } from 'claude-code';
 
+import {
+  cacheLine,
+  createCacheMeter,
+  type CacheMeter,
+  type TurnSample,
+} from '../src/cachemeter.js';
 import { compact, droppableRatio, reductionRatio, resolveOptions } from '../src/compact.js';
 import { adviseCompaction, type Advice, type AdviserOptions } from '../src/adviser.js';
 import { scanForSecrets, type GitleaksOptions, type ProcessRunner } from '../src/gitleaks.js';
@@ -76,6 +83,12 @@ export type HookConfig = CompactOptions & {
   maxAutoCompactions: number;
   /** Ask Jev whether the session is at a boundary before auto-compacting. */
   advise: boolean;
+  /**
+   * Report what each compaction costs in rewritten prompt cache. Free: the
+   * figures come from the turn usage and the cost ledger the engine already
+   * holds, and nothing is sent anywhere.
+   */
+  measureCache: boolean;
   alwaysCompactAtPercent: number;
   model: string;
 };
@@ -127,6 +140,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     gitleaks: options['gitleaks'] !== false,
     advise: options['advise'] !== false,
+    measureCache: options['measureCache'] !== false,
     alwaysCompactAtPercent: optionNumber(
       options,
       'alwaysCompactAtPercent',
@@ -351,6 +365,34 @@ export function decisionLogLines(
   );
 }
 
+/**
+ * Turns the engine's report of a finished turn into a meter sample. `usd` is
+ * the session ledger's own delta rather than a price table, so nothing here
+ * goes stale when rates change; it is left out until there is a previous
+ * reading to subtract.
+ */
+export function turnSample(
+  usage: TurnUsage | undefined,
+  totalUsd: number | undefined,
+  previousTotalUsd: number | undefined,
+): TurnSample | undefined {
+  if (!usage) return undefined;
+  const sample: TurnSample = {
+    cacheWrite: usage.cache_creation_input_tokens ?? 0,
+    cacheRead: usage.cache_read_input_tokens ?? 0,
+    input: usage.input_tokens ?? 0,
+    output: usage.output_tokens ?? 0,
+  };
+  if (
+    typeof totalUsd === 'number' &&
+    typeof previousTotalUsd === 'number' &&
+    totalUsd >= previousTotalUsd
+  ) {
+    sample.usd = totalUsd - previousTotalUsd;
+  }
+  return sample;
+}
+
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
@@ -480,9 +522,15 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let auto = initialAutoCompactState(configured);
   const gitleaks: GitleaksState = {};
+  const cache: CacheMeter = createCacheMeter();
+  /** Session cost at the end of the previous turn, to derive one turn's cost. */
+  let lastTotalUsd: number | undefined;
   let compacting = false;
 
   on('session.compact', async ($, event, next) => {
+    // Every compaction rewrites the cached prefix, the built-in summary
+    // included, so the meter is armed before we know which path this takes.
+    if (configured.measureCache) cache.markCompaction();
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       // Local, free, and no request: if even a perfect run could not reach the
@@ -536,7 +584,14 @@ export const register: Register = (on: On, options: PluginOptions) => {
     if (compacting) return next(event);
     auto = { ...auto, turnsSinceCompaction: auto.turnsSinceCompaction + 1 };
     try {
-      const before = (await $.session.usage()).context.percent ?? 0;
+      const usage = await $.session.usage();
+      const before = usage.context.percent ?? 0;
+      if (configured.measureCache) {
+        const sample = turnSample(event.usage, usage.cost?.usd, lastTotalUsd);
+        lastTotalUsd = usage.cost?.usd ?? lastTotalUsd;
+        const cost = sample ? cache.record(sample) : undefined;
+        if (cost) $.ui.log(cacheLine(cost, cache.totals));
+      }
       const verdict = shouldAutoCompact(auto, before, configured);
       if (!verdict.compact) {
         if (verdict.ask) {
@@ -565,6 +620,9 @@ export const register: Register = (on: On, options: PluginOptions) => {
       compacting = true;
       await $.session.compact();
       const after = (await $.session.usage()).context.percent ?? before;
+      // Re-arms with what this compaction won back, so the next turn's cache
+      // rewrite is reported against the points it bought.
+      if (configured.measureCache) cache.markCompaction(before - after);
       const previous = auto;
       auto = noteCompaction(auto, before, after, configured);
       if (auto.trigger !== previous.trigger) {

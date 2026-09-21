@@ -64,6 +64,7 @@ describe('hook config', () => {
       minPercentDrop: 5,
       maxAutoCompactions: 8,
       advise: true,
+      measureCache: true,
       alwaysCompactAtPercent: 85,
       model: 'jev-latest',
     });
@@ -92,6 +93,7 @@ describe('hook config', () => {
       minPercentDrop: 5,
       maxAutoCompactions: 8,
       advise: true,
+      measureCache: true,
       alwaysCompactAtPercent: 85,
       redact: 'strict',
       sideEffectTools: ['Bash', 'Deploy'],
