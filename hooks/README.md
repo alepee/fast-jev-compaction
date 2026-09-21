@@ -59,6 +59,7 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `advise` | `true` |
+| `onBoundary` | `notify` |
 | `guardRail` | `true` |
 | `measureCache` | `true` |
 | `alwaysCompactAtPercent` | `85` |
@@ -80,7 +81,17 @@ there; a missing one is logged once and the session stops trying, leaving the
 built-in patterns to carry on alone.
 `advise` adds a semantic gate before an automatic compaction: Jev judges
 whether the session is at a boundary, against a floor that slides with context
-usage. Past `alwaysCompactAtPercent` the compaction runs without asking.
+usage. It has a cooldown of its own (`cooldownTurns`), because in notify mode
+nothing resets the compaction cooldown and the question costs a request.
+`onBoundary` says what happens once the moment is judged right. The default,
+`notify`, pins `a good moment to compact (66% context): /compact` under the
+prompt and raises it once on the notification bar, leaving the call to you; it
+touches neither the transcript nor the model. The line is repeated only once
+the context has grown another `minPercentDrop` points, and is cleared as soon
+as a compaction happens or the adviser says the session is mid-task again.
+`onBoundary: compact` compacts straight away instead. Either way, past
+`alwaysCompactAtPercent` the compaction runs on its own and without asking,
+because waiting there would hand the turn to the built-in summary.
 `resultExcerptChars` puts a masked excerpt of each tool result in the question
 that asks whether to keep it; without it Jev judges a result on its tool, its
 input, its success and its size alone. gitleaks scans that window with the
