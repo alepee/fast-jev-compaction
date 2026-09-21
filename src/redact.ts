@@ -204,3 +204,31 @@ export function createRedactor(options: RedactorOptions = {}): Redactor {
     size: { get: () => labels.size, enumerable: true },
   }) as Redactor;
 }
+
+/**
+ * Slack left around a value so a placeholder that grows longer than what it
+ * replaces, or a secret sitting across a cut, cannot push a secret past the
+ * truncation. Masking before truncating is the rule; this is the margin that
+ * lets a caller truncate twice instead of masking an unbounded text.
+ */
+export const REDACTION_MARGIN = 512;
+
+/** Keeps the head and tail of a text and says how much went missing. */
+export function clipMiddle(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  if (limit <= 0) return '';
+  const keep = Math.max(0, limit - 20);
+  const head = Math.ceil(keep / 2);
+  const tail = Math.floor(keep / 2);
+  return `${text.slice(0, head)}…[${text.length - keep} omitted]…${text.slice(text.length - tail)}`;
+}
+
+/**
+ * The bounded, masked form of a text that is about to leave the machine.
+ * Clipped wide, masked, then clipped to the budget: masking an arbitrarily
+ * long text would cost more than the excerpt is worth, and clipping first
+ * alone could cut a secret in half and let the halves through.
+ */
+export function maskKept(text: string, limit: number, redact: Redactor): string {
+  return clipMiddle(redact(clipMiddle(text, limit + REDACTION_MARGIN)), limit);
+}

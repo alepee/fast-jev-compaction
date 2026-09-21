@@ -114,6 +114,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
+    'resultExcerptChars',
   ] as const) {
     const value = options[key];
     if (typeof value === 'number' && Number.isFinite(value)) numbers[key] = value;
@@ -268,7 +269,10 @@ export async function withScannedSecrets(
   state: GitleaksState = {},
 ): Promise<{ config: HookConfig; note?: string }> {
   if (!config.gitleaks || !run || state.available === false) return { config };
-  const options: GitleaksOptions = {};
+  const options: GitleaksOptions = {
+    // Whatever the questions will excerpt has to be scanned with the rest.
+    excerptChars: resolveOptions(config).resultExcerptChars,
+  };
   if (config.gitleaksBinary) options.binary = config.gitleaksBinary;
   if (config.gitleaksConfig) options.config = config.gitleaksConfig;
   const scan = await scanForSecrets(messages, run, options);

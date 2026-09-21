@@ -44,6 +44,12 @@ export interface ToolCall {
   /** Index of the message holding the tool_result block. */
   resultIndex: number;
   resultChars: number;
+  /**
+   * A wide, unmasked slice of the result, kept only when the caller asked for
+   * excerpts. It is masked and clipped to the real budget at the moment the
+   * question is built, never stored in its final form.
+   */
+  resultExcerpt?: string;
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;
@@ -152,6 +158,14 @@ export interface CompactOptions {
   maxRequestTokens?: number;
   /** Characters of a dropped tool result to retain. Default 300. */
   truncateHeadChars?: number;
+  /**
+   * Characters of each tool result shown to Jev in the question that asks
+   * whether to keep it. Without them Jev decides on the tool, its input, its
+   * success and its size alone, never the content. Carried by the question
+   * rather than the state, which is resent with every batch. 0 disables it.
+   * Default 200.
+   */
+  resultExcerptChars?: number;
 }
 
 export interface ResolvedCompactOptions {
@@ -167,6 +181,7 @@ export interface ResolvedCompactOptions {
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;
+  resultExcerptChars: number;
 }
 
 export interface CompactResult {

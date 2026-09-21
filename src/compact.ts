@@ -1,4 +1,4 @@
-import { createRedactor, type Redactor } from './redact.js';
+import { createRedactor, maskKept, noRedaction, type Redactor } from './redact.js';
 import { noulAnswer } from './request.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
@@ -50,6 +50,10 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
+  // Enough for an error message, a first stack frame or the head of a file:
+  // what tells a judge whether the content still matters. Carried by the
+  // question, which is sent once, not by the state, which is resent per batch.
+  resultExcerptChars: 200,
 };
 
 /** A tool whose calls the safety rules refuse to remove entirely. */
@@ -103,11 +107,35 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       0,
       Math.floor(finite(options.truncateHeadChars, DEFAULT_OPTIONS.truncateHeadChars)),
     ),
+    resultExcerptChars: Math.max(
+      0,
+      Math.floor(finite(options.resultExcerptChars, DEFAULT_OPTIONS.resultExcerptChars)),
+    ),
   };
 }
 
-/** The two `noul` questions asked about one call: keep the call, keep its result. */
-export function questionsFor(call: ToolCall): JevQuestions {
+export interface QuestionOptions {
+  /** Masks the excerpt before it is sent. Nothing is excerpted without one. */
+  redact?: Redactor;
+  /** Characters of the result to show. 0, the default, shows none. */
+  excerptChars?: number;
+}
+
+/**
+ * The two `noul` questions asked about one call: keep the call, keep its
+ * result.
+ *
+ * The excerpt rides on the result question rather than in the state. The
+ * state is resent with every batch, so a slice of every result would be paid
+ * once per request; a question is sent once. Same text, a quarter of the cost,
+ * and it lands where the decision is actually made.
+ */
+export function questionsFor(call: ToolCall, options: QuestionOptions = {}): JevQuestions {
+  const excerptChars = options.excerptChars ?? 0;
+  const excerpt =
+    excerptChars > 0 && call.resultExcerpt
+      ? maskKept(call.resultExcerpt, excerptChars, options.redact ?? noRedaction())
+      : '';
   return {
     [`call_${call.id}`]: {
       type: 'noul',
@@ -115,7 +143,9 @@ export function questionsFor(call: ToolCall): JevQuestions {
     },
     [`result_${call.id}`]: {
       type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do`,
+      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do${
+        excerpt ? `. It ${call.isError ? 'failed' : 'reads'}: ${JSON.stringify(excerpt)}` : ''
+      }`,
     },
   };
 }
@@ -128,13 +158,14 @@ export function batchCalls(
   calls: readonly ToolCall[],
   stateTokens: number,
   options: Pick<ResolvedCompactOptions, 'maxRequestTokens'>,
+  questionOptions: QuestionOptions = {},
 ): ToolCall[][] {
   const budget = options.maxRequestTokens - stateTokens - REQUEST_OVERHEAD_TOKENS;
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
   for (const call of calls) {
-    const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
+    const tokens = estimateTokens(JSON.stringify(questionsFor(call, questionOptions)));
     if (current.length > 0 && currentTokens + tokens > budget) {
       batches.push(current);
       current = [];
@@ -183,8 +214,12 @@ async function askBatch(
   judge: Judge,
   state: CompactionState,
   batch: readonly ToolCall[],
+  questionOptions: QuestionOptions,
 ): Promise<Map<string, CallAnswer>> {
-  const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
+  const questions: JevQuestions = Object.assign(
+    {},
+    ...batch.map((call) => questionsFor(call, questionOptions)),
+  );
   const { answers } = await judge.judge(state, questions);
   return new Map(
     batch.map((call) => [
@@ -354,7 +389,11 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
-  const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
+  const calls = collectToolCalls(
+    messages,
+    resolved.preserveRecentMessages,
+    resolved.resultExcerptChars,
+  );
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
 
@@ -370,9 +409,13 @@ export async function compact(
   if (candidates.length > 0) {
     const state = fitState(messages, calls, resolved, redactor);
     fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
+    const questionOptions: QuestionOptions = {
+      redact: redactor,
+      excerptChars: resolved.resultExcerptChars,
+    };
+    batches = batchCalls(candidates, state.tokens, resolved, questionOptions);
     const answered = await Promise.all(
-      batches.map((batch) => askBatch(judge, state.state, batch)),
+      batches.map((batch) => askBatch(judge, state.state, batch, questionOptions)),
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

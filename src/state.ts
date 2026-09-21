@@ -1,4 +1,4 @@
-import { noRedaction, type Redactor } from './redact.js';
+import { clipMiddle, noRedaction, REDACTION_MARGIN, type Redactor } from './redact.js';
 import type {
   CompactionState,
   FittedState,
@@ -63,10 +63,14 @@ export function isPinned(
 /**
  * Pairs every tool_use with its tool_result by `tool_use_id`. Calls without a
  * result are not candidates (there is nothing to drop yet).
+ *
+ * `excerptChars` asks for a slice of each result to be carried on the call,
+ * wide enough that masking it later cannot let a secret through a cut.
  */
 export function collectToolCalls(
   messages: readonly Message[],
   preserveRecentMessages: number,
+  excerptChars = 0,
 ): ToolCall[] {
   const results = new Map<string, { index: number; result: ToolResult }>();
   messages.forEach((message, index) => {
@@ -79,7 +83,7 @@ export function collectToolCalls(
     for (const tool of message.toolUses) {
       const found = results.get(tool.tool_use_id);
       if (!found) continue;
-      calls.push({
+      const call: ToolCall = {
         id: `t${calls.length + 1}`,
         tool_use_id: tool.tool_use_id,
         tool: tool.tool,
@@ -91,7 +95,11 @@ export function collectToolCalls(
         pinned:
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
           isPinned(found.index, messages.length, preserveRecentMessages),
-      });
+      };
+      if (excerptChars > 0 && found.result.text.length > 0) {
+        call.resultExcerpt = clipMiddle(found.result.text, excerptChars + REDACTION_MARGIN);
+      }
+      calls.push(call);
     }
   });
   return calls;

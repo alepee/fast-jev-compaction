@@ -16,7 +16,7 @@
  * the compaction state, so nothing leaves the machine unmasked.
  */
 
-import { createRedactor, type Redactor } from './redact.js';
+import { createRedactor, maskKept, type Redactor } from './redact.js';
 import type { RedactionLevel } from './redact.js';
 import type { Judge, JevQuestions, Message } from './types.js';
 
@@ -152,28 +152,6 @@ export function floorFor(usage: number, profile: AdviserProfile = {}): number {
   if (usage >= looseAt) return low;
   const raw = high - (high - low) * ((usage - strictUntil) / (looseAt - strictUntil));
   return Math.round(raw * 1000) / 1000;
-}
-
-/**
- * Masking cost is linear in the text, and this runs on every turn, so only
- * what will be kept is masked, plus a margin. A secret ending within the
- * margin of the cut is still seen whole by the redactor and masked; the
- * compaction path, which runs once per compaction, can afford to mask first
- * and truncate after.
- */
-const REDACTION_MARGIN = 512;
-
-function maskKept(text: string, limit: number, redact: Redactor): string {
-  return clipMiddle(redact(clipMiddle(text, limit + REDACTION_MARGIN)), limit);
-}
-
-function clipMiddle(text: string, limit: number): string {
-  if (text.length <= limit) return text;
-  if (limit <= 0) return '';
-  const keep = Math.max(0, limit - 20);
-  const head = Math.ceil(keep / 2);
-  const tail = Math.floor(keep / 2);
-  return `${text.slice(0, head)}…[${text.length - keep} omitted]…${text.slice(text.length - tail)}`;
 }
 
 export interface AdviserSnapshot {

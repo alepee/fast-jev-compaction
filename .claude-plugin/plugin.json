@@ -127,6 +127,12 @@
       "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
+    "resultExcerptChars": {
+      "type": "number",
+      "title": "Result excerpt shown to Jev",
+      "description": "Characters of each tool result shown to Jev in the question that asks whether to keep it. Without them Jev decides on the tool, its input, its success and its size alone, never the content. Carried by the question, which is sent once, not by the state, which is resent with every batch. 0 turns it off.",
+      "default": 200
+    },
     "model": {
       "type": "string",
       "title": "Jev model",

@@ -55,7 +55,12 @@ built-in compaction summary with the original messages.
 4. For every non-pinned call Jev gets two `noul` questions: should the **call**
    stay (knowing it was made, with its input, still matters), and should the
    **result** stay verbatim (its contents are still needed and re-running the
-   tool would not do).
+   tool would not do). The result question carries a masked
+   `resultExcerptChars` excerpt of that result, so the judgment is made on the
+   content and not on a size in characters alone. It rides on the question
+   rather than in the state because the state is resent with every batch and a
+   question is sent once: the same text for a quarter of the tokens. gitleaks
+   scans exactly that window along with the rest.
 5. Questions are split into as many requests as needed so state plus questions
    stays under `maxRequestTokens` (30k by default, under Jev's 32k request
    limit). The same full state is resent with every request; requests run
@@ -141,6 +146,7 @@ put it in a source file.
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
 | `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
+| `resultExcerptChars` | `200` | Characters of each result shown to Jev in the question about it; 0 turns it off |
 
 `result.stats` reports message and character counts before and after, the
 per-reason decision counts (including `protected`), the distinct values masked
