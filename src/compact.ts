@@ -1,6 +1,7 @@
 import { createRedactor, maskKept, noRedaction, type Redactor } from './redact.js';
 import { noulAnswer } from './request.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
+import { threadNote } from './thread.js';
 import type {
   CallAnswer,
   CallDecision,
@@ -136,14 +137,18 @@ export function questionsFor(call: ToolCall, options: QuestionOptions = {}): Jev
     excerptChars > 0 && call.resultExcerpt
       ? maskKept(call.resultExcerpt, excerptChars, options.redact ?? noRedaction())
       : '';
+  // Free, local and only present where it applies: the thread this call sits
+  // in, which one call on its own cannot show.
+  const thread = threadNote(call);
+  const context = thread ? `. ${thread}` : '';
   return {
     [`call_${call.id}`]: {
       type: 'noul',
-      instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next`,
+      instructions: `Tool call ${call.id} (${call.tool}) should stay in the history: knowing this call was made, with its input, still matters for what the assistant does next${context}`,
     },
     [`result_${call.id}`]: {
       type: 'noul',
-      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do${
+      instructions: `The full output of tool call ${call.id} (${call.tool}, ${call.resultChars} chars) should stay in the history verbatim: the assistant still needs its contents and re-running the tool would not do${context}${
         excerpt ? `. It ${call.isError ? 'failed' : 'reads'}: ${JSON.stringify(excerpt)}` : ''
       }`,
     },
