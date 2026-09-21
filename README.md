@@ -1,5 +1,126 @@
 # keep-the-thread
 
+> **Archived. Do not use this.**
+>
+> An adversarial review of this repository against its own measurements found
+> that the idea does not hold. Three findings, each verifiable from this
+> repository or from Anthropic's published documentation, are set out below.
+> Everything after them is the original README, left intact as the record.
+
+## Why this is archived
+
+### 1. The model round trip decided nothing
+
+The plugin asks Jev two probabilities per tool call and feeds them to a
+two-branch cascade (`src/compact.ts`): keep the result at `keepResult >= 0.4`,
+otherwise truncate it at `keepCall >= 0.15`, otherwise drop the call.
+
+Across three real sessions it produced **420 decisions and zero variance**:
+137, 174 and 109 results truncated, **0 calls dropped**. Replaying
+`decideCall` over the full grid of probabilities actually observed
+(`keepCall` 0.15 to 0.26 by `keepResult` 0.09 to 0.17) returns **one outcome,
+`drop_result`, at all 108 points**, for plain, side-effecting and errored
+calls alike. The branches work (0.40 keeps, 0.14 drops); Jev simply never
+leaves the middle band, and `keepResultThreshold: 0.4` was never calibrated
+against the distribution it emits. The maximum `keepResult` ever observed was
+0.17.
+
+The equivalent program is `if (!pinned) result = result.slice(0, 300) + note`.
+One line, local, free, and byte-identical to what this plugin produced on
+every session it was measured on. Four paid requests carrying ~24k tokens each
+computed a constant.
+
+Upstream found the same defect independently:
+[tamaratran/fast-jev-compaction#56](https://github.com/tamaratran/fast-jev-compaction/issues/56),
+"keepResult and keepCall come back on different scales".
+
+### 2. Claude Code already does the only thing it did, first, for free
+
+[How Claude Code works](https://code.claude.com/docs/en/how-claude-code-works),
+verbatim:
+
+> It clears older tool outputs first, then summarizes the conversation if
+> needed. Your requests and key code snippets are preserved.
+
+Clearing old tool outputs before summarising is the whole of this plugin's
+observed behaviour. No benchmark in this repository, or upstream, ever showed
+that a blind 300-character head beats it.
+
+### 3. Editing tool results in place is a documented API anti-pattern
+
+[Preserved thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking),
+from the table "What counts as an edit":
+
+> Clear or shorten an earlier `tool_result`, re-encode an earlier image, or
+> change an earlier `tool_use` input | **Invalid for every later thinking
+> block**
+
+That is this plugin's only operation, performed 109 to 174 times per
+compaction. The same page names it directly and gives the supported
+alternative:
+
+> Clearing or shortening old `tool_result` content, or re-encoding old images,
+> in place | Shorten a tool result before the first time you send it, **not
+> after**. To clear old results later, trim context on the server with
+> `clear_tool_uses_20250919`
+
+And states the deadline:
+
+> The API enforces the prefix check by default for accounts created on or
+> after August 31, 2026 [...] **Later models will enforce the prefix check for
+> all accounts**, so make your integration append-only now.
+
+So Anthropic ships this plugin's core feature as a supported server-side
+primitive, `clear_tool_uses_20250919`, which clears old tool results by rule
+without failing the prefix check, without a client-side cache rewrite and
+without a second vendor.
+
+**Measured honestly:** no API error was ever observed. A session carrying 261
+thinking blocks took a compaction that truncated 109 tool results and was not
+rejected. Either the account predates the cutoff, or the engine sets
+`prefix_mismatch_behavior`. The risk is latent, not manifest. The
+documentation says the exemption is temporary.
+
+### And it was expensive
+
+The cache meter this project built to answer its critics answered against it.
+One measured compaction, at 21% of a 1M window:
+
+```
+cache rewritten 214k tokens above the 16k baseline, 39k less to send each turn: ~69 turns to break even
+```
+
+The entire cached prefix was invalidated, because the edits land at the start
+of the history. The cost is structural, not incidental: the rewrite scales
+with the context *retained*, and retaining context verbatim was the product.
+The shipped `cooldownTurns: 3` permits the next full-prefix invalidation three
+turns into a 69-turn repayment.
+
+### What was actually worth building
+
+Everything here that does not depend on Jev, and none of it needed the rest:
+
+- `src/cachemeter.ts`, which measures what a compaction costs in rewritten
+  cache and converts it into turns to break even. It is the reason this
+  postmortem has numbers, and the finding it produced is the one that killed
+  its own project.
+- `src/guardrail.ts`, on a real failure mode: a pruned history looks like a
+  complete one, and an assistant reading its own unbacked turns can take them
+  as a precedent. Observed upstream in
+  [#65](https://github.com/tamaratran/fast-jev-compaction/issues/65).
+- `src/redact.ts` and `src/gitleaks.ts`, masking with stable placeholders and
+  a literal scan.
+
+### Unverified claims deliberately left out
+
+The review also argued this plugin is ~32x worse per token freed than native
+compaction. That figure rests on assumptions about the native summariser that
+were never measured, and it is not repeated as fact here. Quotes attributed to
+third-party critics came from secondary recaps rather than primary sources and
+are likewise omitted.
+
+---
+
 Compaction that keeps the thread. A summary makes an assistant forget the exact
 error, the exact path, the exact constraint it had just learned. This plugin
 never writes one: it scores every tool call and result in a handful of fast,
