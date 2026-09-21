@@ -194,12 +194,12 @@ describe('the log line', () => {
     expect(adviceLine(yes)).toContain('boundary reached');
     expect(adviceLine(yes)).toMatch(/score 0\.9\d vs floor 0\.70/);
     const no = await adviseCompaction(transcript, 0.5, { judge: async () => answers(0.1, 0.1) });
-    expect(adviceLine(no)).toContain('mid-task, postponed');
+    expect(adviceLine(no)).toContain('mid-task, nothing suggested');
     const failed = await adviseCompaction(transcript, 0.5, {
       judge: async () => {
         throw new Error('offline');
       },
     });
-    expect(adviceLine(failed)).toContain('no judgment: offline');
+    expect(adviceLine(failed)).toContain('no judgment, nothing suggested (offline)');
   });
 });

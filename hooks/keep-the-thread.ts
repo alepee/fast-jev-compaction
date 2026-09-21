@@ -85,6 +85,13 @@ export type HookConfig = CompactOptions & {
   /** Ask Jev whether the session is at a boundary before auto-compacting. */
   advise: boolean;
   /**
+   * What happens once the moment is judged right: `notify` says so on the
+   * notification bar and pins a line under the prompt, leaving the call to
+   * the person; `compact` does it. Either way the ceiling still compacts on
+   * its own, because past it the built-in summary would take over instead.
+   */
+  onBoundary: 'notify' | 'compact';
+  /**
    * Leave a note after a compaction saying what was removed and that a missing
    * tool output proves nothing. A pruned history looks like a complete one,
    * and an assistant reading its own unbacked turns learns from them.
@@ -148,6 +155,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     gitleaks: options['gitleaks'] !== false,
     advise: options['advise'] !== false,
+    onBoundary: options['onBoundary'] === 'compact' ? 'compact' : 'notify',
     guardRail: options['guardRail'] !== false,
     measureCache: options['measureCache'] !== false,
     alwaysCompactAtPercent: optionNumber(
@@ -448,17 +456,30 @@ function notify(
  */
 export interface AutoCompactState {
   turnsSinceCompaction: number;
+  /**
+   * Turns since the adviser was last consulted. It costs a request, and in
+   * notify mode nothing happens to reset the compaction cooldown, so without
+   * this the question would be asked again every single turn.
+   */
+  turnsSinceAdvice: number;
   compactions: number;
   /** Trigger in force, raised above a context level that did not pay off. */
   trigger: number;
   /** Context percent right after the last compaction, or undefined. */
   lastPercentAfter?: number;
+  /** Context percent at which a compaction was last suggested to the person. */
+  suggestedAtPercent?: number;
   /** Set once the guards give up on this session. */
   disabledReason?: string;
 }
 
 export function initialAutoCompactState(config: HookConfig): AutoCompactState {
-  return { turnsSinceCompaction: Number.POSITIVE_INFINITY, compactions: 0, trigger: config.compactAtPercent };
+  return {
+    turnsSinceCompaction: Number.POSITIVE_INFINITY,
+    turnsSinceAdvice: Number.POSITIVE_INFINITY,
+    compactions: 0,
+    trigger: config.compactAtPercent,
+  };
 }
 
 /**
@@ -489,8 +510,32 @@ export function shouldAutoCompact(
   // Past the ceiling the window is about to fill anyway: compact without
   // spending a request on whether the moment is ideal.
   if (percent >= config.alwaysCompactAtPercent) return { compact: true };
-  if (config.advise) return { compact: false, ask: true };
-  return { compact: true };
+  if (!config.advise) return { compact: true };
+  // The judgment costs a request. In notify mode nothing resets the
+  // compaction cooldown, so the adviser needs a cooldown of its own.
+  if (state.turnsSinceAdvice < config.cooldownTurns) return { compact: false };
+  return { compact: false, ask: true };
+}
+
+/**
+ * Whether the person should be told again. The pinned line stays up on its
+ * own, so a second notice is only worth it once the context has grown past
+ * where the last one was raised.
+ */
+export function shouldSuggest(
+  state: AutoCompactState,
+  percent: number,
+  config: HookConfig,
+): boolean {
+  return (
+    state.suggestedAtPercent === undefined ||
+    percent >= state.suggestedAtPercent + config.minPercentDrop
+  );
+}
+
+/** `a good moment to compact (66% context): /compact`, for the bar and the pinned line. */
+export function suggestionLine(percent: number): string {
+  return `a good moment to compact (${Math.round(percent)}% context): /compact`;
 }
 
 /** The adviser settings a hook config implies; the snapshot reuses the compaction's masking. */
@@ -498,10 +543,10 @@ export function adviserOptions(config: HookConfig): AdviserOptions {
   return config.redact ? { redact: config.redact } : {};
 }
 
-/** `72% ≥ 0.66 floor (finished 0.91, hands-on 0.78)`, for the log. */
+/** `boundary reached: score 0.72 vs floor 0.66 (finished 0.91, hands-on 0.78)`, for the log. */
 export function adviceLine(advice: Advice): string {
-  if (advice.error) return `compaction postponed (no judgment: ${advice.error})`;
-  return `${advice.compact ? 'boundary reached' : 'mid-task, postponed'}: score ${advice.score.toFixed(
+  if (advice.error) return `no judgment, nothing suggested (${advice.error})`;
+  return `${advice.compact ? 'boundary reached' : 'mid-task, nothing suggested'}: score ${advice.score.toFixed(
     2,
   )} vs floor ${advice.floor.toFixed(2)} (finished ${advice.finished.toFixed(
     2,
@@ -547,6 +592,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
     // Every compaction rewrites the cached prefix, the built-in summary
     // included, so the meter is armed before we know which path this takes.
     if (configured.measureCache) cache.markCompaction();
+    // Whoever compacted, the standing suggestion is spent.
+    if (auto.suggestedAtPercent !== undefined) {
+      $.ui.status(undefined);
+      auto = { ...auto, suggestedAtPercent: undefined };
+    }
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       // Local, free, and no request: if even a perfect run could not reach the
@@ -598,7 +648,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (compacting) return next(event);
-    auto = { ...auto, turnsSinceCompaction: auto.turnsSinceCompaction + 1 };
+    auto = {
+      ...auto,
+      turnsSinceCompaction: auto.turnsSinceCompaction + 1,
+      turnsSinceAdvice: auto.turnsSinceAdvice + 1,
+    };
     try {
       const usage = await $.session.usage();
       const before = usage.context.percent ?? 0;
@@ -626,12 +680,33 @@ export const register: Register = (on: On, options: PluginOptions) => {
             ),
             adviserOptions(config),
           );
+          auto = { ...auto, turnsSinceAdvice: 0 };
           $.ui.log(adviceLine(advice));
-          if (!advice.compact) return next(event);
+          if (!advice.compact) {
+            // The moment passed, or never came: a pinned line saying otherwise
+            // would be stale from here on.
+            if (auto.suggestedAtPercent !== undefined) {
+              $.ui.status(undefined);
+              auto = { ...auto, suggestedAtPercent: undefined };
+            }
+            return next(event);
+          }
         } else {
           if (verdict.reason) $.ui.log(verdict.reason);
           return next(event);
         }
+      }
+      // The moment is right. Whose call it is depends on `onBoundary`, except
+      // past the ceiling, where waiting would hand the turn to the built-in
+      // summary instead.
+      if (configured.onBoundary === 'notify' && before < configured.alwaysCompactAtPercent) {
+        const line = suggestionLine(before);
+        // The pinned line is the standing signal; the bar is only for the
+        // moment it changes, and only when there is something new to say.
+        $.ui.status(line);
+        if (shouldSuggest(auto, before, configured)) $.ui.toast(line, { timeoutMs: 15_000 });
+        auto = { ...auto, suggestedAtPercent: before };
+        return next(event);
       }
       compacting = true;
       await $.session.compact();

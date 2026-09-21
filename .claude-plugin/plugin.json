@@ -1,6 +1,6 @@
 {
   "name": "keep-the-thread",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Compaction that keeps the thread: the transcript stays verbatim, stale tool results go, the moment is judged, and nothing leaves the machine unmasked.",
   "license": "MIT",
   "userConfig": {
@@ -72,6 +72,12 @@
       "title": "Ask before auto-compacting",
       "description": "Before an automatic compaction, ask Jev whether the session is at a boundary where compacting is safe, instead of going on the context percentage alone. A mid-task compaction is when losing tool results hurts most.",
       "default": true
+    },
+    "onBoundary": {
+      "type": "string",
+      "title": "When the moment is right",
+      "description": "What happens once the session is judged to be at a boundary: 'notify' says so on the notification bar and pins a line under the prompt, leaving the call to you; 'compact' compacts straight away. Either way the context ceiling still compacts on its own, because past it the built-in summary would take over instead.",
+      "default": "notify"
     },
     "guardRail": {
       "type": "boolean",

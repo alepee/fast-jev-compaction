@@ -361,12 +361,31 @@ is**: 0.90 while the window is under 10%, falling to 0.50 at 90%. A wrong call
 costs most when there is still room and least when compaction is imminent, so
 the bar drops as the room runs out.
 
-Two limits keep this from ever making things worse:
+Once the moment is judged right, **the plugin says so rather than acting**.
+`onBoundary: 'notify'`, the default, pins a line under the prompt and raises it
+once on the notification bar:
 
-- past `alwaysCompactAtPercent` (85%) the compaction runs **without asking**,
-  so an unreachable adviser can never stop a session from compacting;
-- without a usable judgment the answer is **no**, so a compaction never follows
-  a bad answer. `advise: false` removes the question entirely.
+```
+a good moment to compact (66% context): /compact
+```
+
+It touches neither the transcript nor the model: no message is injected, no
+question is asked, and the call stays with the person. The line is repeated
+only once the context has grown another `minPercentDrop` points, and is
+cleared as soon as a compaction happens or the adviser finds the session
+mid-task again. `onBoundary: 'compact'` compacts straight away instead.
+
+Three limits keep this from ever making things worse:
+
+- past `alwaysCompactAtPercent` (85%) the compaction runs on its own and
+  **without asking**, whatever `onBoundary` says: waiting there would hand the
+  turn to the built-in summary, and an unreachable adviser can never stop a
+  session from compacting;
+- the question has a cooldown of its own (`cooldownTurns`), because notifying
+  resets nothing and the judgment costs a request;
+- without a usable judgment the answer is **no**, so nothing is suggested and
+  nothing is compacted on a bad answer. `advise: false` removes the question
+  entirely.
 
 The snapshot sent is a bounded tail of the conversation, not the whole
 transcript, and it goes through the same masking as the compaction state.
