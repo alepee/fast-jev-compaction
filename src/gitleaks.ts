@@ -9,6 +9,7 @@
  * Nothing leaves the machine. The binary is local, and the secrets it reports
  * are only ever used to remove themselves from the state.
  */
+import { clipMiddle, REDACTION_MARGIN } from './redact.js';
 import type { Message } from './types.js';
 
 export interface ProcessRunResult {
@@ -44,6 +45,12 @@ export interface GitleaksOptions {
    * masking it would eat text Jev needs. Default 8.
    */
   minLength?: number;
+  /**
+   * Characters of each tool result the compaction will excerpt into its
+   * questions. Anything that leaves the machine has to be scanned, so the
+   * same window is put in the corpus. 0, the default, scans no result.
+   */
+  excerptChars?: number;
   cwd?: string;
 }
 
@@ -64,11 +71,18 @@ export interface GitleaksScan {
 const EMPTY: GitleaksScan = { secrets: [], findings: [] };
 
 /**
- * The text that will actually be sent to Jev: message text and tool inputs.
- * Tool results never leave (they are replaced by a `ok, N chars` note), so
- * scanning them would only cost time.
+ * The text that will actually be sent to Jev: message text, tool inputs, and
+ * the window of each tool result the questions will excerpt.
+ *
+ * The rest of a result never leaves (the state replaces it with a
+ * `ok, N chars` note), so scanning it would only cost time. The window here
+ * has to be the same one `collectToolCalls` slices, or a secret could be
+ * excerpted without having been scanned.
  */
-export function redactionCorpus(messages: readonly Message[]): string {
+export function redactionCorpus(
+  messages: readonly Message[],
+  excerptChars = 0,
+): string {
   const parts: string[] = [];
   for (const message of messages) {
     if (message.text) parts.push(message.text);
@@ -77,6 +91,11 @@ export function redactionCorpus(messages: readonly Message[]): string {
         parts.push(JSON.stringify(tool.input));
       } catch {
         // An input that will not serialise never reaches the state either.
+      }
+    }
+    if (excerptChars > 0) {
+      for (const result of message.toolResults ?? []) {
+        if (result.text) parts.push(clipMiddle(result.text, excerptChars + REDACTION_MARGIN));
       }
     }
   }
@@ -121,7 +140,7 @@ export async function scanForSecrets(
   run: ProcessRunner,
   options: GitleaksOptions = {},
 ): Promise<GitleaksScan> {
-  const corpus = redactionCorpus(messages);
+  const corpus = redactionCorpus(messages, options.excerptChars ?? 0);
   if (!corpus.trim()) return EMPTY;
   const argv = [
     options.binary ?? 'gitleaks',

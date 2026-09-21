@@ -68,6 +68,7 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
+| `resultExcerptChars` | `200` |
 | `model` | `jev-latest` |
 
 `redact` masks personal data and secrets in the state before it leaves the
@@ -79,6 +80,10 @@ built-in patterns to carry on alone.
 `advise` adds a semantic gate before an automatic compaction: Jev judges
 whether the session is at a boundary, against a floor that slides with context
 usage. Past `alwaysCompactAtPercent` the compaction runs without asking.
+`resultExcerptChars` puts a masked excerpt of each tool result in the question
+that asks whether to keep it; without it Jev judges a result on its tool, its
+input, its success and its size alone. gitleaks scans that window with the
+rest, since it is text that leaves the machine.
 `measureCache` logs what each compaction cost in rewritten prompt cache next
 to the context it freed, since the context meter only ever shows the gain. It
 reads the turn usage and the cost ledger the engine already holds, so it sends
