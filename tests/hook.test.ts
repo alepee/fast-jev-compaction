@@ -64,6 +64,7 @@ describe('hook config', () => {
       minPercentDrop: 5,
       maxAutoCompactions: 8,
       advise: true,
+      guardRail: true,
       measureCache: true,
       alwaysCompactAtPercent: 85,
       model: 'jev-latest',
@@ -93,6 +94,7 @@ describe('hook config', () => {
       minPercentDrop: 5,
       maxAutoCompactions: 8,
       advise: true,
+      guardRail: true,
       measureCache: true,
       alwaysCompactAtPercent: 85,
       redact: 'strict',
@@ -165,7 +167,16 @@ describe('compactSession', () => {
     expect(bodies).toHaveLength(1);
     expect(JSON.parse(bodies[0]!).model).toBe('jev-x');
     expect(output.decisions.map((d) => d.action)).toEqual(['drop_call', 'keep']);
-    expect(messages.map((m) => m.handle)).toEqual(['h-0', 'h-tool-2', 'r-tool-2', 'h-5', 'h-6']);
+    // The note is the one message without a handle: it is the plugin's, not the engine's.
+    expect(messages.map((m) => m.handle)).toEqual([
+      'h-0',
+      'h-tool-2',
+      'r-tool-2',
+      'h-5',
+      'h-6',
+      undefined,
+    ]);
+    expect(messages[5]?.text).toContain('1 tool call removed');
     expect(summarize(output)).toMatch(/^\d+% reduction; 1 kept, 1 call_dropped; state ~\d+ tokens \(full\) in 1 request\(s\)$/);
     expect(decisionLog(output)).toBe('t1:Read:drop_call/call=0.10/result=0.10 t2:Bash:keep/call=0.90/result=0.90');
     expect(decisionLogLines(output)).toEqual([`decisions: ${decisionLog(output)}`]);
