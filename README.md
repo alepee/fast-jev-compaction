@@ -249,7 +249,7 @@ Four guards, all in the hook:
 - a **cap** of `maxAutoCompactions` per session, and a full stop once the
   trigger reaches 95%.
 
-### What a compaction costs
+### What a compaction costs, and when it pays
 
 Freeing context is only half the trade. Editing the history invalidates the
 prompt cache from the first changed message on, so the next request rewrites
@@ -262,8 +262,22 @@ written per turn, and when a compaction lands it attributes the excess on the
 turn that follows:
 
 ```
-cache rewritten 58k tokens above the 4000 baseline (+$0.41) for 21 context points freed
+cache rewritten 214k tokens above the 16k baseline, 39k less to send each turn: ~69 turns to break even
 ```
+
+The break-even is the point of the line. The rewrite is paid once, the
+smaller prompt is saved on every later turn, so the two are not comparable
+until they are put in the same unit. At the usual rates (a cache write costs
+1.25 base input tokens, a cache read 0.1) the arithmetic is unforgiving:
+repaying a full-prefix rewrite takes about 12.5 turns for each unit of
+context freed, so a compaction that frees a sixth of the prompt needs roughly
+seventy more turns to come out ahead.
+
+Two things follow. The ratio does **not** improve by compacting later, since
+the rewrite and the saving both scale with the context. And compacting for
+economy is almost always a mistake: the reason to compact is room. That is
+why `compactAtPercent` defaults to 75 rather than something comfortable, and
+why nothing is suggested below it.
 
 Medians rather than means, so one heavy turn does not hide the rewrite behind
 it; the rewrite turn itself never enters the baseline. The dollar figure is the
@@ -321,7 +335,7 @@ when all of these hold:
 
 | Condition | Default |
 | --- | --- |
-| context at or above `compactAtPercent` | 60% |
+| context at or above `compactAtPercent` | 75% |
 | turns since the last compaction | 3 (`cooldownTurns`) |
 | compactions so far this session | under 8 (`maxAutoCompactions`) |
 | auto-compaction not disabled by the guards | |

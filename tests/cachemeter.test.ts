@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { cacheLine, createCacheMeter, median, type TurnSample } from '../src/index.js';
+import {
+  breakEvenTurns,
+  cacheLine,
+  createCacheMeter,
+  median,
+  promptTokens,
+  type TurnSample,
+} from '../src/index.js';
 import { turnSample } from '../hooks/keep-the-thread.ts';
 
 function turn(cacheWrite: number, usd?: number): TurnSample {
@@ -89,14 +96,48 @@ describe('createCacheMeter', () => {
   });
 });
 
+describe('breakEvenTurns', () => {
+  it('is the rewrite, priced up, over the saving, priced down', () => {
+    // 214k rewritten at 1.25, repaid 39k a turn at 0.1: the live run of 1.3.0.
+    expect(breakEvenTurns(214_000, 39_000)).toBe(69);
+  });
+
+  it('has no answer when the prompt did not shrink', () => {
+    expect(breakEvenTurns(214_000, 0)).toBeUndefined();
+    expect(breakEvenTurns(214_000, -5000)).toBeUndefined();
+  });
+
+  it('has no answer when nothing was rewritten', () => {
+    expect(breakEvenTurns(0, 39_000)).toBeUndefined();
+  });
+
+  it('takes a host own rates', () => {
+    expect(breakEvenTurns(100, 100, 1, 1)).toBe(1);
+  });
+});
+
 describe('cacheLine', () => {
-  it('puts the cost and what it bought on one line', () => {
+  it('weighs the rewrite against what it buys, per turn', () => {
     const meter = createCacheMeter();
     for (const usd of [0.05, 0.05, 0.05]) meter.record(turn(4000, usd));
     meter.markCompaction(21);
+    // Prompt 44k before (40k read + 4k write), 62k after: it grew.
     const line = cacheLine(meter.record(turn(62_000, 0.46))!, meter.totals);
     expect(line).toBe(
-      'cache rewritten 58k tokens above the 4000 baseline (+$0.41) for 21 context points freed',
+      'cache rewritten 58k tokens above the 4000 baseline (+$0.41) (21 context points): it never breaks even, the prompt did not get smaller',
+    );
+  });
+
+  it('gives the break-even when the prompt really shrank', () => {
+    const meter = createCacheMeter();
+    for (let i = 0; i < 3; i += 1) {
+      meter.record({ cacheWrite: 16_000, cacheRead: 253_000, input: 5, output: 300 });
+    }
+    meter.markCompaction();
+    const verdict = meter.record({ cacheWrite: 230_000, cacheRead: 0, input: 5, output: 300 });
+    expect(verdict?.freedTokens).toBe(39_000);
+    expect(cacheLine(verdict!)).toBe(
+      'cache rewritten 214k tokens above the 16k baseline, 39k less to send each turn: ~69 turns to break even',
     );
   });
 
@@ -109,7 +150,7 @@ describe('cacheLine', () => {
     meter.markCompaction(10);
     const line = cacheLine(meter.record(turn(50_000, 0.35))!, meter.totals);
     expect(line).toContain('session total');
-    expect(line).toContain('over 2 compactions for 30 points');
+    expect(line).toContain('rewritten over 2 compactions');
   });
 });
 

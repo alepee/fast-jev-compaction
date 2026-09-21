@@ -25,14 +25,14 @@ describe('onBoundary', () => {
 
 describe('shouldAutoCompact', () => {
   it('asks for a judgment once the trigger is reached', () => {
-    expect(shouldAutoCompact(ready(), 65, config)).toEqual({ compact: false, ask: true });
+    expect(shouldAutoCompact(ready(), 78, config)).toEqual({ compact: false, ask: true });
   });
 
   it('gives the adviser a cooldown of its own, since notifying resets nothing', () => {
-    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 1 }), 65, config)).toEqual({
+    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 1 }), 78, config)).toEqual({
       compact: false,
     });
-    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 3 }), 65, config)).toEqual({
+    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 3 }), 78, config)).toEqual({
       compact: false,
       ask: true,
     });
@@ -47,7 +47,7 @@ describe('shouldAutoCompact', () => {
 
   it('needs no judgment when the adviser is off', () => {
     const noAdvice = resolveHookConfig({ advise: false });
-    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 0 }), 65, noAdvice)).toEqual({
+    expect(shouldAutoCompact(ready({ turnsSinceAdvice: 0 }), 78, noAdvice)).toEqual({
       compact: true,
     });
   });
@@ -55,14 +55,14 @@ describe('shouldAutoCompact', () => {
 
 describe('shouldSuggest', () => {
   it('says it once', () => {
-    expect(shouldSuggest(ready(), 65, config)).toBe(true);
+    expect(shouldSuggest(ready(), 78, config)).toBe(true);
   });
 
   it('holds its tongue until the context has really grown', () => {
-    const said = ready({ suggestedAtPercent: 65 });
-    expect(shouldSuggest(said, 66, config)).toBe(false);
-    expect(shouldSuggest(said, 69, config)).toBe(false);
-    expect(shouldSuggest(said, 70, config)).toBe(true);
+    const said = ready({ suggestedAtPercent: 78 });
+    expect(shouldSuggest(said, 79, config)).toBe(false);
+    expect(shouldSuggest(said, 82, config)).toBe(false);
+    expect(shouldSuggest(said, 83, config)).toBe(true);
   });
 });
 

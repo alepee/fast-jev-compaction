@@ -30,7 +30,19 @@ import type {
 } from '../src/types.js';
 
 const HOOK_DEFAULTS = {
-  compactAtPercent: 60,
+  /**
+   * Context percent below which nothing is ever suggested.
+   *
+   * Compacting almost never pays for itself in money: rewriting the cached
+   * prefix costs, at the usual rates, roughly 12.5 turns of the smaller
+   * prompt per unit freed, so a compaction that frees a sixth of the context
+   * takes around seventy turns to break even. That ratio does not improve by
+   * waiting, since both sides scale with the context. What waiting buys is
+   * the chance of never paying at all, on a session that ends before the
+   * window is ever under pressure. So the trigger sits where room, not
+   * economy, starts to be the reason.
+   */
+  compactAtPercent: 75,
   minReductionRatio: 0.25,
   /** Turns to let pass after a compaction before auto-compacting again. */
   cooldownTurns: 3,

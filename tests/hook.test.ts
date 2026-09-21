@@ -58,7 +58,7 @@ describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
     expect(resolveHookConfig({})).toEqual({
       gitleaks: true,
-      compactAtPercent: 60,
+      compactAtPercent: 75,
       minReductionRatio: 0.25,
       cooldownTurns: 3,
       minPercentDrop: 5,
@@ -89,7 +89,7 @@ describe('hook config', () => {
       maxStateTokens: 1000,
       model: 'jev-x',
       goal: 'g',
-      compactAtPercent: 60,
+      compactAtPercent: 75,
       minReductionRatio: 0.25,
       cooldownTurns: 3,
       minPercentDrop: 5,
@@ -210,9 +210,9 @@ describe('auto-compaction guards', () => {
 
   it('waits for the cooldown, the trigger, and the session cap', () => {
     const fresh = initialAutoCompactState(config);
-    expect(shouldAutoCompact(fresh, 59, config)).toEqual({ compact: false });
+    expect(shouldAutoCompact(fresh, 74, config)).toEqual({ compact: false });
     // Over the trigger but under the ceiling: the moment still has to be judged.
-    expect(shouldAutoCompact(fresh, 61, config)).toEqual({ compact: false, ask: true });
+    expect(shouldAutoCompact(fresh, 76, config)).toEqual({ compact: false, ask: true });
     expect(shouldAutoCompact(fresh, 90, config)).toEqual({ compact: true });
     // Just compacted: three turns of quiet before asking again.
     expect(shouldAutoCompact({ ...fresh, turnsSinceCompaction: 1 }, 99, config).compact).toBe(false);
@@ -224,7 +224,7 @@ describe('auto-compaction guards', () => {
 
   it('skips the judgment entirely when the adviser is off', () => {
     const off = { ...config, advise: false };
-    expect(shouldAutoCompact(initialAutoCompactState(off), 61, off)).toEqual({ compact: true });
+    expect(shouldAutoCompact(initialAutoCompactState(off), 76, off)).toEqual({ compact: true });
   });
 
   it('compacts without asking once the context is past the ceiling', () => {
@@ -241,7 +241,7 @@ describe('auto-compaction guards', () => {
 
   it('leaves the trigger alone when a compaction actually frees context', () => {
     const after = noteCompaction(initialAutoCompactState(config), 80, 40, config);
-    expect(after.trigger).toBe(60);
+    expect(after.trigger).toBe(75);
     expect(after.compactions).toBe(1);
     expect(after.turnsSinceCompaction).toBe(0);
     expect(after.disabledReason).toBeUndefined();
