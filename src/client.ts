@@ -1,5 +1,5 @@
 import { buildJevRequest, parseJevResponse } from './request.js';
-import type { JevAsker, JevQuestions, JevResponse, JevState } from './types.js';
+import type { Judge, JevQuestions, JevResponse, JevState } from './types.js';
 
 export interface JevClientOptions {
   /** Defaults to `process.env.TYPESAFE_API_KEY`. */
@@ -13,7 +13,7 @@ export interface JevClientOptions {
 }
 
 /** Asks Jev over HTTP with the global `fetch` (or an injected one). */
-export class JevClient implements JevAsker {
+export class JevClient implements Judge {
   private readonly apiKey: string;
   private readonly model: string | undefined;
   private readonly baseUrl: string | undefined;
@@ -26,7 +26,7 @@ export class JevClient implements JevAsker {
     this.fetcher = options.fetch ?? fetch;
   }
 
-  async ask(state: JevState, questions: JevQuestions): Promise<JevResponse> {
+  async judge(state: JevState, questions: JevQuestions): Promise<JevResponse> {
     if (!this.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
     const request = buildJevRequest(
       { apiKey: this.apiKey, model: this.model, baseUrl: this.baseUrl },

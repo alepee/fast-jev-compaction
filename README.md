@@ -104,9 +104,12 @@ if (reductionRatio(result) < 0.25) {
 `Message` is a subset of Claude Code's `SessionMessage`, so a session transcript
 can be passed in as is.
 
-To bring your own transport, implement `JevAsker` (one `ask(state, questions)`
-method) and call `compact(messages, asker, options)`; `buildJevRequest` and
-`parseJevResponse` give you the HTTP request body and response validation.
+To bring your own backend, implement `Judge` (one `judge(state, questions)`
+method) and call `compact(messages, judge, options)`. `Judge` is the port and
+names no vendor: `JevClient` is the HTTP adapter for TypeSafe, the hook wraps
+the engine's own fetch, and a local runtime for an open-weight decision model
+would be a third. `buildJevRequest` and `parseJevResponse` give you the HTTP
+request body and response validation.
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `decideCall`, `applyDecisions`) are exported too.
 
@@ -149,7 +152,7 @@ reduction a compaction of this transcript could reach.
 injected process runner and returns the values to mask; it never throws, so a
 missing binary degrades to the built-in patterns.
 
-`adviseCompaction(messages, usage, asker, options)` answers whether now is a
+`adviseCompaction(messages, usage, judge, options)` answers whether now is a
 good moment to compact, with `adviserSnapshot`, `adviceScore` and `floorFor`
 exposed separately. It never throws: without a judgment, the answer is no.
 

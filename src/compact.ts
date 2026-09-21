@@ -8,7 +8,7 @@ import type {
   CompactOptions,
   CompactResult,
   CompactionState,
-  JevAsker,
+  Judge,
   JevQuestions,
   Message,
   ResolvedCompactOptions,
@@ -180,12 +180,12 @@ export function decideCall(
 }
 
 async function askBatch(
-  asker: JevAsker,
+  judge: Judge,
   state: CompactionState,
   batch: readonly ToolCall[],
 ): Promise<Map<string, CallAnswer>> {
   const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
-  const { answers } = await asker.ask(state, questions);
+  const { answers } = await judge.judge(state, questions);
   return new Map(
     batch.map((call) => [
       call.id,
@@ -349,7 +349,7 @@ function count(decisions: readonly CallDecision[], reason: CallDecision['reason'
  */
 export async function compact(
   messages: readonly Message[],
-  asker: JevAsker,
+  judge: Judge,
   options: CompactOptions = {},
 ): Promise<CompactResult> {
   const started = Date.now();
@@ -372,7 +372,7 @@ export async function compact(
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
     const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
+      batches.map((batch) => askBatch(judge, state.state, batch)),
     );
     for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
   }

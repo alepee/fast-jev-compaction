@@ -15,7 +15,7 @@ import { buildJevRequest, DEFAULT_MODEL, parseJevResponse } from '../src/request
 import type {
   CompactOptions,
   CompactResult,
-  JevAsker,
+  Judge,
   Message,
   ToolResult,
   ToolUse,
@@ -157,10 +157,10 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+/** A `Judge` over the engine's `$.http.fetch`. */
+export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): Judge {
   return {
-    async ask(state, questions) {
+    async judge(state, questions) {
       const request = buildJevRequest({ apiKey, model }, state, questions);
       const response = await fetchFn(request.url, {
         method: request.method,
