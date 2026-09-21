@@ -236,10 +236,44 @@ Four guards, all in the hook:
 - a **cap** of `maxAutoCompactions` per session, and a full stop once the
   trigger reaches 95%.
 
+### What a compaction costs
+
+Freeing context is only half the trade. Editing the history invalidates the
+prompt cache from the first changed message on, so the next request rewrites
+the cache for everything after it. The context meter never shows that side: it
+reports the window emptying, not the tokens paid to refill the cache. A
+compaction can look like a clear win and cost more than it saved.
+
+The plugin puts both on one line. It keeps a rolling median of the cache
+written per turn, and when a compaction lands it attributes the excess on the
+turn that follows:
+
+```
+cache rewritten 58k tokens above the 4000 baseline (+$0.41) for 21 context points freed
+```
+
+Medians rather than means, so one heavy turn does not hide the rewrite behind
+it; the rewrite turn itself never enters the baseline. The dollar figure is the
+session ledger's own delta, not a rate table, so it does not go stale. From the
+second compaction on, the line carries the session running total. Nothing is
+sent anywhere and no extra request is made: the figures come from the turn
+usage and the cost ledger the engine already holds. Set `measureCache` to false
+to drop the line.
+
 ## Limitations
 
 - Only tool calls and results are candidates; text messages are never removed
   or shortened in the output (they are only abridged in the state Jev sees).
+- That makes the budget finite. Once the tool results of a session have been
+  truncated, `droppableRatio()` falls under `minReductionRatio`, the pre-flight
+  refuses without calling Jev, and Claude Code's built-in summary takes over
+  the verbatim history the plugin had preserved. The guarantee is deferred, not
+  permanent. New tool calls refill the budget, so exhaustion bites on sessions
+  dominated by message text; `minReductionRatio` and `truncateHeadChars` move
+  where it bites.
+- Jev is asked whether a tool result is worth keeping without being shown that
+  result: the state carries the tool, its input, whether it succeeded and its
+  size in characters, never its content.
 - Masking is pattern-based. It catches shapes, not meaning: a person's name, a
   free-text address or an unusual secret format goes through. What was looked
   at to close that gap, and why nothing was picked, is in
@@ -252,7 +286,7 @@ Four guards, all in the hook:
 
 ## Claude Code plugin
 
-The repository root is a Claude Code function-hook plugin: `hooks/fast-jev.ts`
+The repository root is a Claude Code function-hook plugin: `hooks/keep-the-thread.ts`
 is a thin adapter that feeds `session.compact` transcripts through `src/` and
 falls back to Claude Code's built-in summary on errors or insufficient
 reduction. See [`hooks/README.md`](hooks/README.md) for configuration and the

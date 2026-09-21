@@ -1,6 +1,6 @@
 {
   "name": "keep-the-thread",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Compaction that keeps the thread: the transcript stays verbatim, stale tool results go, the moment is judged, and nothing leaves the machine unmasked.",
   "license": "MIT",
   "userConfig": {
@@ -71,6 +71,12 @@
       "type": "boolean",
       "title": "Ask before auto-compacting",
       "description": "Before an automatic compaction, ask Jev whether the session is at a boundary where compacting is safe, instead of going on the context percentage alone. A mid-task compaction is when losing tool results hurts most.",
+      "default": true
+    },
+    "measureCache": {
+      "type": "boolean",
+      "title": "Measure the cache cost",
+      "description": "Report what each compaction costs in rewritten prompt cache, next to the context it freed. Editing the history invalidates the cached prefix, and the context meter never shows that side of the trade. Free: it reads the turn usage and cost ledger the engine already holds.",
       "default": true
     },
     "alwaysCompactAtPercent": {

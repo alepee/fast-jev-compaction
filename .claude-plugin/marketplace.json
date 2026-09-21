@@ -9,7 +9,7 @@
       "name": "keep-the-thread",
       "source": "./",
       "description": "Compaction that keeps the thread: the transcript stays verbatim, stale tool results go, the moment is judged, and nothing leaves the machine unmasked.",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "license": "MIT"
     }
   ]
