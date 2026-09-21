@@ -9,7 +9,7 @@ import {
   type Judge,
   type Message,
 } from '../src/index.js';
-import { adviceLine } from '../hooks/fast-jev.ts';
+import { adviceLine } from '../hooks/keep-the-thread.ts';
 
 function choice(probabilities: Record<string, number>) {
   const best = Object.entries(probabilities).sort((a, b) => b[1] - a[1])[0]!;

@@ -1,13 +1,15 @@
-# fast-jev-compaction
+# keep-the-thread
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+Compaction that keeps the thread. A summary makes an assistant forget the exact
+error, the exact path, the exact constraint it had just learned. This plugin
+never writes one: it scores every tool call and result in one fast request,
+drops or truncates the stale ones, and leaves everything it keeps **verbatim**.
 
-> Fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
-> adding PII masking of what leaves the machine, asymmetric keep thresholds, and
-> guards against compaction loops. See [What this fork changes](#what-this-fork-changes).
+It also decides *when* to compact, by asking whether the session is at a
+boundary rather than watching a percentage, and it masks personal data and
+secrets before anything leaves the machine.
+
+Also usable as an npm library.
 
 ## What and why
 
@@ -76,12 +78,12 @@ fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
 ## Install and usage
 
 ```sh
-npm install fast-jev-compaction
+npm install keep-the-thread
 export TYPESAFE_API_KEY=...
 ```
 
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+import { compactMessages, reductionRatio, type Message } from 'keep-the-thread';
 
 const transcript: Message[] = [
   { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
@@ -156,18 +158,21 @@ missing binary degrades to the built-in patterns.
 good moment to compact, with `adviserSnapshot`, `adviceScore` and `floorFor`
 exposed separately. It never throws: without a judgment, the answer is no.
 
-## What this fork changes
+## Three decisions worth knowing
 
-Three things, from an audit of the upstream design.
+The project began as a fork of
+[tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction),
+whose idea it keeps: prune rather than summarize. These three changes came out
+of auditing that design, and are why this is now its own project.
 
 ### Privacy
 
-Upstream sends the whole conversation to `api.typesafe.ai` on every compaction,
+The original sent the whole conversation to `api.typesafe.ai` on every compaction,
 and resends it with every request of the batch: prompts, assistant text and
 tool inputs, so file paths, commands and queries too. Only tool *outputs* are
 replaced by a note. That is a third party in the chain, and nothing said so.
 
-This fork masks the state before it leaves the machine (`redact`, `standard` by
+This masks the state before it leaves the machine (`redact`, `standard` by
 default) and reports what it masked in `stats.redactions` and in the toast.
 
 Two layers, because they catch different things:
@@ -201,7 +206,7 @@ party at all, do not run this plugin.
 
 ### Thresholds
 
-Upstream used one threshold at `0.5` for both decisions. Two problems: the test
+The original used one threshold at `0.5` for both decisions. Two problems: the test
 is `keep >= threshold`, so raising the number makes pruning *more* aggressive,
 not less — easy to get backwards; and it treats truncating a result (the
 assistant re-runs the tool) and deleting a call (the record is gone) as the same
@@ -215,7 +220,7 @@ works and sets both.
 
 ### Compaction loops
 
-Upstream's `turn.complete` asked for a compaction whenever the context was over
+The original's `turn.complete` asked for a compaction whenever the context was over
 `compactAtPercent`. If the compaction did not bring it back under, the next turn
 asked again, and every attempt costs a full round of Jev requests.
 
@@ -337,15 +342,15 @@ Then add this repository as a plugin marketplace and install the plugin,
 either from the shell or as slash commands inside a session:
 
 ```sh
-claude plugin marketplace add alepee/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+claude plugin marketplace add alepee/keep-the-thread
+claude plugin install keep-the-thread@keep-the-thread
 ```
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
 …); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
 auto-compaction) goes through Jev: the toast reads
-`fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
+`keep-the-thread: kept N/M messages, no summary (…)` when the pruned history
 replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
 could not remove enough (short sessions, or when it fails).
 
